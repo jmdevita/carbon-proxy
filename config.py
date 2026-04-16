@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    upstream_url: str = "http://llama-swap:8080"
+    upstream_url: str = "http://localhost:8080"
     listen_port: int = 8080
 
     # Carbon intensity

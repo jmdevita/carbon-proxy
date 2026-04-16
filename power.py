@@ -24,7 +24,9 @@ _APPLE_SILICON_TDP = {
     "M4": 22, "M4 Pro": 30, "M4 Max": 40,
 }
 
-# x86 CPU TDP lookup table (loaded from CodeCarbon's cpu_power.csv, Apache 2.0)
+# x86 CPU TDP lookup table
+# Source: CodeCarbon (https://github.com/mlco2/codecarbon), Apache 2.0 license
+# File: data/cpu_power.csv
 # Stores entries as {lowercased_name: tdp, ...} and {frozenset(tokens): (name, tdp), ...}
 _CPU_TDP_BY_NAME: dict[str, float] = {}
 _CPU_TDP_BY_TOKENS: dict[frozenset[str], tuple[str, float]] = {}
