@@ -44,6 +44,12 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/")
+async def root():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/dashboard")
+
+
 @app.get("/dashboard")
 async def dashboard():
     return FileResponse(STATIC_DIR / "dashboard.html", media_type="text/html")
