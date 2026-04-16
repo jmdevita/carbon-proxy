@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Carbon Proxy</title>
+<style>
+  :root {
+    --bg: #181818;
+    --card: #212121;
+    --border: #2e2e2e;
+    --text: #e8e8e8;
+    --muted: #888;
+    --primary: #bffb4f;
+    --primary-dim: rgba(191,251,79,0.12);
+    --red: #ff6b6b;
+    --red-dim: rgba(255,107,107,0.12);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  .container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 40px 24px;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 48px;
+  }
+
+  .logo {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+  }
+
+  .logo span { color: var(--primary); }
+
+  .header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .status {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--primary);
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: all 0.2s;
+  }
+
+  .btn:hover { border-color: var(--primary); color: var(--primary); }
+
+  .btn-primary {
+    background: var(--primary);
+    color: #181818;
+    border-color: var(--primary);
+    font-weight: 600;
+  }
+
+  .btn-primary:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Hero gauges */
+  .gauges {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+    margin-bottom: 48px;
+  }
+
+  .gauge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 16px;
+  }
+
+  .gauge-ring {
+    position: relative;
+    width: 140px;
+    height: 140px;
+    margin-bottom: 12px;
+  }
+
+  .gauge-ring svg {
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+  }
+
+  .gauge-ring circle {
+    fill: none;
+    stroke-width: 6;
+    stroke-linecap: round;
+  }
+
+  .gauge-ring .bg { stroke: var(--border); }
+  .gauge-ring .fill { stroke: var(--primary); transition: stroke-dashoffset 0.8s ease; }
+
+  .gauge-value {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .gauge-number {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--primary);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  .gauge-unit {
+    font-size: 0.7rem;
+    color: var(--muted);
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .gauge-label {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  /* Equivalents */
+  .equivalents {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 48px;
+  }
+
+  .equiv {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 20px;
+    background: var(--card);
+    border-radius: 10px;
+  }
+
+  .equiv-icon {
+    font-size: 1.6rem;
+    flex-shrink: 0;
+    width: 40px;
+    text-align: center;
+  }
+
+  .equiv-data { flex: 1; }
+
+  .equiv-number {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .equiv-desc {
+    font-size: 0.72rem;
+    color: var(--muted);
+    line-height: 1.3;
+    margin-top: 2px;
+  }
+
+  /* Balance bar */
+  .balance-section {
+    margin-bottom: 48px;
+  }
+
+  .balance-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 12px;
+  }
+
+  .balance-title {
+    font-size: 0.8rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .balance-amount {
+    font-size: 0.9rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .balance-bar-bg {
+    height: 8px;
+    background: var(--card);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .balance-bar-fill {
+    height: 100%;
+    background: var(--primary);
+    border-radius: 4px;
+    transition: width 0.6s ease;
+  }
+
+  .balance-bar-fill.deficit { background: var(--red); }
+
+  .balance-meta {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 8px;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  /* Sections */
+  .section {
+    margin-bottom: 40px;
+  }
+
+  .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .section-title {
+    font-size: 0.8rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .section-toggle {
+    font-size: 0.75rem;
+    color: var(--muted);
+    transition: transform 0.2s;
+  }
+
+  .section-content {
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+  }
+
+  .section-content.collapsed { max-height: 0 !important; }
+
+  /* Live indicator */
+  .live-strip {
+    display: flex;
+    gap: 24px;
+    padding: 14px 20px;
+    background: var(--card);
+    border-radius: 10px;
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .live-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .live-label { color: var(--muted); }
+  .live-val { color: var(--text); font-weight: 600; }
+
+  /* Tables */
+  .table-card {
+    background: var(--card);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .table-scroll {
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  .table-scroll::-webkit-scrollbar { width: 4px; }
+  .table-scroll::-webkit-scrollbar-track { background: transparent; }
+  .table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+  }
+
+  th {
+    text-align: left;
+    padding: 10px 14px;
+    color: var(--muted);
+    font-weight: 500;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    position: sticky;
+    top: 0;
+    background: var(--card);
+  }
+
+  td {
+    padding: 8px 14px;
+    border-top: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 0.68rem;
+    font-weight: 500;
+  }
+
+  .tag-measured { background: rgba(191,251,79,0.15); color: var(--primary); }
+  .tag-estimated { background: rgba(255,180,50,0.15); color: #ffb432; }
+  .tag-none { background: rgba(136,136,136,0.15); color: var(--muted); }
+
+  /* Responsive */
+  @media (max-width: 700px) {
+    .gauges, .equivalents { grid-template-columns: 1fr; }
+    .live-strip { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <div class="logo">carbon<span>proxy</span></div>
+  <div class="header-actions">
+    <div class="status"></div>
+    <button class="btn" onclick="refreshAll()">Refresh</button>
+    <button class="btn btn-primary" id="offsetBtn" onclick="manualOffset()">Offset Now</button>
+  </div>
+</header>
+
+<!-- Hero Gauges -->
+<div class="gauges">
+  <div class="gauge">
+    <div class="gauge-ring">
+      <svg viewBox="0 0 140 140">
+        <circle class="bg" cx="70" cy="70" r="62"/>
+        <circle class="fill" id="gaugeEnergy" cx="70" cy="70" r="62"
+          stroke-dasharray="389.56" stroke-dashoffset="389.56"/>
+      </svg>
+      <div class="gauge-value">
+        <div class="gauge-number" id="gEnergy">0</div>
+        <div class="gauge-unit">kWh</div>
+      </div>
+    </div>
+    <div class="gauge-label">Energy consumed</div>
+  </div>
+  <div class="gauge">
+    <div class="gauge-ring">
+      <svg viewBox="0 0 140 140">
+        <circle class="bg" cx="70" cy="70" r="62"/>
+        <circle class="fill" id="gaugeEmissions" cx="70" cy="70" r="62"
+          stroke-dasharray="389.56" stroke-dashoffset="389.56"/>
+      </svg>
+      <div class="gauge-value">
+        <div class="gauge-number" id="gEmissions">0</div>
+        <div class="gauge-unit">g CO2</div>
+      </div>
+    </div>
+    <div class="gauge-label">Emissions</div>
+  </div>
+  <div class="gauge">
+    <div class="gauge-ring">
+      <svg viewBox="0 0 140 140">
+        <circle class="bg" cx="70" cy="70" r="62"/>
+        <circle class="fill" id="gaugeRequests" cx="70" cy="70" r="62"
+          stroke-dasharray="389.56" stroke-dashoffset="389.56"/>
+      </svg>
+      <div class="gauge-value">
+        <div class="gauge-number" id="gRequests">0</div>
+        <div class="gauge-unit">requests</div>
+      </div>
+    </div>
+    <div class="gauge-label">Total requests</div>
+  </div>
+</div>
+
+<!-- Equivalents -->
+<div class="equivalents" style="grid-template-columns: 1fr;">
+  <div class="equiv" style="justify-content: center;">
+    <div class="equiv-icon">&#127794;</div>
+    <div class="equiv-data">
+      <div class="equiv-number" id="eqTrees">0</div>
+      <div class="equiv-desc">trees/year needed to offset your emissions</div>
+    </div>
+  </div>
+</div>
+
+<!-- Offset Balance -->
+<div class="balance-section">
+  <div class="balance-header">
+    <div class="balance-title">Offset Balance</div>
+    <div class="balance-amount" id="balanceText">--</div>
+  </div>
+  <div class="balance-bar-bg">
+    <div class="balance-bar-fill" id="balanceBar" style="width:0%"></div>
+  </div>
+  <div class="balance-meta">
+    <span id="balanceLeft">--</span>
+    <span id="balanceRight">--</span>
+  </div>
+</div>
+
+<!-- Live Power -->
+<div class="section">
+  <div class="section-header" onclick="toggleSection('livePower')">
+    <div class="section-title">Live Power</div>
+    <div class="section-toggle" id="livePower-arrow">&#9660;</div>
+  </div>
+  <div class="section-content" id="livePower">
+    <div class="live-strip">
+      <div class="live-item"><span class="live-label">CPU</span> <span class="live-val" id="cpuW">--</span></div>
+      <div class="live-item"><span class="live-label">GPU</span> <span class="live-val" id="gpuW">--</span></div>
+      <div class="live-item"><span class="live-label">Total</span> <span class="live-val" id="totalW">--</span></div>
+      <div class="live-item"><span class="live-label">Source</span> <span class="live-val" id="pSource">--</span></div>
+      <div class="live-item"><span class="live-label">Active</span> <span class="live-val" id="activeR">0</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Daily Breakdown -->
+<div class="section">
+  <div class="section-header" onclick="toggleSection('dailySection')">
+    <div class="section-title">Daily Breakdown</div>
+    <div class="section-toggle" id="dailySection-arrow">&#9660;</div>
+  </div>
+  <div class="section-content" id="dailySection">
+    <div class="table-card"><div class="table-scroll">
+      <table>
+        <thead><tr><th>Date</th><th>Source</th><th>Requests</th><th>Tokens</th><th>kWh</th><th>CO2 (kg)</th></tr></thead>
+        <tbody id="dailyTb"><tr><td colspan="6" style="color:var(--muted);text-align:center;">--</td></tr></tbody>
+      </table>
+    </div></div>
+  </div>
+</div>
+
+<!-- Recent Requests -->
+<div class="section">
+  <div class="section-header" onclick="toggleSection('reqSection')">
+    <div class="section-title">Recent Requests</div>
+    <div class="section-toggle" id="reqSection-arrow">&#9660;</div>
+  </div>
+  <div class="section-content" id="reqSection">
+    <div class="table-card"><div class="table-scroll">
+      <table>
+        <thead><tr><th>Time</th><th>Source</th><th>Model</th><th>In</th><th>Out</th><th>Duration</th><th>Energy</th><th>CO2</th><th>Src</th></tr></thead>
+        <tbody id="reqTb"><tr><td colspan="9" style="color:var(--muted);text-align:center;">--</td></tr></tbody>
+      </table>
+    </div></div>
+  </div>
+</div>
+
+<!-- Offset History -->
+<div class="section">
+  <div class="section-header" onclick="toggleSection('offsetSection')">
+    <div class="section-title">Offset History</div>
+    <div class="section-toggle" id="offsetSection-arrow">&#9660;</div>
+  </div>
+  <div class="section-content" id="offsetSection">
+    <div class="table-card"><div class="table-scroll">
+      <table>
+        <thead><tr><th>Time</th><th>Provider</th><th>CO2 (g)</th><th>Cost</th><th>Trees</th><th>Cert</th></tr></thead>
+        <tbody id="offTb"><tr><td colspan="6" style="color:var(--muted);text-align:center;">--</td></tr></tbody>
+      </table>
+    </div></div>
+  </div>
+</div>
+
+</div>
+
+<script>
+const CIRC = 2 * Math.PI * 62; // 389.56
+
+function esc(s) { const e = document.createElement('span'); e.textContent = s; return e.innerHTML; }
+function safeUrl(u) { try { const x = new URL(u); return (x.protocol==='https:'||x.protocol==='http:') ? x.href : ''; } catch(e) { return ''; } }
+function fmt(n, d=2) { return n == null || isNaN(n) ? '0' : Number(n).toFixed(d); }
+function fmtShort(n) { if (n >= 1000) return (n/1000).toFixed(1)+'k'; return n < 0.01 && n > 0 ? n.toExponential(1) : fmt(n, n < 1 ? 4 : 1); }
+function fmtTime(iso) { if (!iso) return '--'; return new Date(iso).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
+function fmtDur(ms) { return ms < 1000 ? ms+'ms' : (ms/1000).toFixed(1)+'s'; }
+function srcTag(s) { return `<span class="tag tag-${s||'none'}">${s||'none'}</span>`; }
+
+function setGauge(id, pct) {
+  const offset = CIRC * (1 - Math.min(1, pct));
+  document.getElementById(id).setAttribute('stroke-dashoffset', offset);
+}
+
+function toggleSection(id) {
+  const el = document.getElementById(id);
+  const arrow = document.getElementById(id + '-arrow');
+  el.classList.toggle('collapsed');
+  arrow.style.transform = el.classList.contains('collapsed') ? 'rotate(-90deg)' : '';
+}
+
+async function refreshAll() {
+  const [summary, equiv, balance, live, daily, reqs, offsets] = await Promise.all([
+    fetch('/carbon/summary').then(r=>r.json()).catch(()=>({})),
+    fetch('/carbon/equivalents').then(r=>r.json()).catch(()=>({})),
+    fetch('/carbon/balance').then(r=>r.json()).catch(()=>({})),
+    fetch('/carbon/live').then(r=>r.json()).catch(()=>({})),
+    fetch('/carbon/daily').then(r=>r.json()).catch(()=>[]),
+    fetch('/carbon/requests?limit=50').then(r=>r.json()).catch(()=>[]),
+    fetch('/carbon/offsets?limit=20').then(r=>r.json()).catch(()=>[]),
+  ]);
+
+  // Gauges
+  const kwh = summary.total_energy_kwh || 0;
+  const co2 = summary.total_co2_grams || 0;
+  const totalReqs = summary.total_requests || 0;
+  document.getElementById('gEnergy').textContent = fmtShort(kwh);
+  document.getElementById('gEmissions').textContent = fmtShort(co2);
+  document.getElementById('gRequests').textContent = totalReqs;
+  // Animate gauges (scale relative, cap at 100%)
+  setGauge('gaugeEnergy', Math.min(1, kwh / Math.max(kwh, 0.001)));
+  setGauge('gaugeEmissions', Math.min(1, co2 / Math.max(co2, 0.001)));
+  setGauge('gaugeRequests', Math.min(1, totalReqs / Math.max(totalReqs, 1)));
+
+  // Equivalents
+  const treesVal = equiv.trees_to_offset_yearly || 0;
+  document.getElementById('eqTrees').textContent = treesVal < 0.0001 && treesVal > 0 ? '<0.0001' : fmt(treesVal, 4);
+
+  // Balance
+  const emitted = balance.total_co2_grams || 0;
+  const offset = balance.total_offset_grams || 0;
+  const bal = balance.balance_grams || 0;
+  const trees = balance.trees_planted || 0;
+  const pct = emitted > 0 ? Math.min(100, (offset / emitted) * 100) : 0;
+
+  const balBar = document.getElementById('balanceBar');
+  balBar.style.width = pct + '%';
+  balBar.className = 'balance-bar-fill' + (bal > 0 ? ' deficit' : '');
+
+  document.getElementById('balanceText').textContent =
+    bal > 0 ? `${fmt(bal,2)}g CO2 emitted` : 'Net zero';
+  document.getElementById('balanceText').style.color = bal > 0 ? 'var(--red)' : 'var(--primary)';
+  document.getElementById('balanceLeft').textContent =
+    `${fmt(offset,2)}g offset` + (trees > 0 ? ` | ${trees} trees` : '');
+  document.getElementById('balanceRight').textContent = `${fmt(pct,0)}% covered`;
+
+  // Live
+  document.getElementById('cpuW').textContent = fmt(live.cpu_watts,1) + 'W';
+  document.getElementById('gpuW').textContent = fmt(live.gpu_watts,1) + 'W';
+  document.getElementById('totalW').textContent = fmt(live.total_watts,1) + 'W';
+  document.getElementById('pSource').textContent = `${live.power_source} (${live.cpu_method}/${live.gpu_method})`;
+  document.getElementById('activeR').textContent = live.active_requests || 0;
+
+  // Daily
+  const dTb = document.getElementById('dailyTb');
+  dTb.innerHTML = daily.length ? daily.slice(0,20).map(r => `<tr>
+    <td>${esc(r.date||'')}</td><td>${esc(r.source)}</td><td>${r.requests}</td>
+    <td>${(r.total_tokens||0).toLocaleString()}</td><td>${fmt(r.energy_kwh,4)}</td><td>${fmt(r.co2_kg,6)}</td>
+  </tr>`).join('') : '<tr><td colspan="6" style="color:var(--muted);text-align:center;">No data</td></tr>';
+
+  // Requests
+  const rTb = document.getElementById('reqTb');
+  rTb.innerHTML = reqs.length ? reqs.map(r => `<tr>
+    <td>${fmtTime(r.timestamp)}</td><td>${esc(r.source)}</td><td>${esc(r.model)}</td>
+    <td>${r.tokens_in}</td><td>${r.tokens_out}</td><td>${fmtDur(r.duration_ms)}</td>
+    <td>${fmt(r.energy_joules,1)}J</td><td>${fmt(r.co2_grams,4)}g</td><td>${srcTag(r.power_source)}</td>
+  </tr>`).join('') : '<tr><td colspan="9" style="color:var(--muted);text-align:center;">No data</td></tr>';
+
+  // Offsets
+  const oTb = document.getElementById('offTb');
+  oTb.innerHTML = offsets.length ? offsets.map(r => `<tr>
+    <td>${fmtTime(r.timestamp)}</td><td>${esc(r.provider)}</td><td>${fmt(r.co2_grams_offset,2)}</td>
+    <td>${r.cost_cents ? '$'+(r.cost_cents/100).toFixed(2) : '--'}</td>
+    <td>${r.tree_count||'--'}</td>
+    <td>${r.certificate_url&&safeUrl(r.certificate_url) ? '<a href="'+esc(safeUrl(r.certificate_url))+'" target="_blank" rel="noopener" style="color:var(--primary);">View</a>' : '--'}</td>
+  </tr>`).join('') : '<tr><td colspan="6" style="color:var(--muted);text-align:center;">No offsets</td></tr>';
+}
+
+function getOffsetKey() {
+  let key = localStorage.getItem('offset_api_key');
+  if (!key) {
+    key = prompt('Enter your offset API key:');
+    if (key) localStorage.setItem('offset_api_key', key.trim());
+  }
+  return key ? key.trim() : null;
+}
+
+async function manualOffset() {
+  const key = getOffsetKey();
+  if (!key) return;
+
+  const btn = document.getElementById('offsetBtn');
+  btn.disabled = true; btn.textContent = 'Purchasing...';
+  try {
+    const r = await fetch('/carbon/offset', {
+      method: 'POST',
+      headers: {'Authorization': 'Bearer ' + key},
+    });
+    const d = await r.json();
+    if (r.ok) {
+      btn.textContent = 'Done!';
+      refreshAll();
+    } else {
+      if (r.status === 401) localStorage.removeItem('offset_api_key');
+      const msg = d.detail || d.message || 'Offset failed';
+      btn.textContent = 'Failed';
+      alert(msg);
+    }
+    setTimeout(() => { btn.textContent='Offset Now'; btn.disabled=false; }, 2000);
+  } catch(e) {
+    btn.textContent = 'Error';
+    setTimeout(() => { btn.textContent='Offset Now'; btn.disabled=false; }, 2000);
+  }
+}
+
+refreshAll();
+setInterval(refreshAll, 10000);
+</script>
+</body>
+</html>
