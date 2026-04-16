@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Carbon Proxy</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7/css/materialdesignicons.min.css">
 <style>
   :root {
     --bg: #181818;
@@ -15,6 +18,8 @@
     --primary-dim: rgba(191,251,79,0.12);
     --red: #ff6b6b;
     --red-dim: rgba(255,107,107,0.12);
+    --blue: #6bb3ff;
+    --orange: #ffb432;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -37,7 +42,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 48px;
+    margin-bottom: 24px;
   }
 
   .logo {
@@ -90,6 +95,56 @@
 
   .btn-primary:hover { opacity: 0.85; }
   .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Filter bar */
+  .filter-bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 32px;
+    flex-wrap: wrap;
+  }
+
+  .filter-group {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .filter-btn {
+    padding: 6px 12px;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.78rem;
+    transition: all 0.2s;
+  }
+
+  .filter-btn:hover { color: var(--text); }
+  .filter-btn.active { background: var(--primary); color: #181818; font-weight: 600; }
+
+  .filter-select {
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 0.78rem;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    padding-right: 24px;
+  }
+
+  .filter-select option {
+    background: var(--card);
+    color: var(--text);
+  }
 
   /* Hero gauges */
   .gauges {
@@ -163,40 +218,38 @@
   .equivalents {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 16px;
+    gap: 12px;
     margin-bottom: 48px;
   }
 
   .equiv {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 14px;
-    padding: 20px;
+    gap: 6px;
+    padding: 16px 8px;
     background: var(--card);
     border-radius: 10px;
-  }
-
-  .equiv-icon {
-    font-size: 1.6rem;
-    flex-shrink: 0;
-    width: 40px;
     text-align: center;
   }
 
-  .equiv-data { flex: 1; }
+  .equiv-icon {
+    font-size: 1.4rem;
+    color: var(--primary);
+  }
 
   .equiv-number {
-    font-size: 1.3rem;
+    font-size: 1.1rem;
     font-weight: 700;
     color: var(--text);
     font-variant-numeric: tabular-nums;
+    line-height: 1;
   }
 
   .equiv-desc {
-    font-size: 0.72rem;
+    font-size: 0.65rem;
     color: var(--muted);
     line-height: 1.3;
-    margin-top: 2px;
   }
 
   /* Balance bar */
@@ -247,6 +300,18 @@
     color: var(--muted);
   }
 
+  /* Chart card */
+  .chart-card {
+    background: var(--card);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+
+  .chart-card canvas {
+    width: 100% !important;
+  }
+
   /* Sections */
   .section {
     margin-bottom: 40px;
@@ -290,6 +355,7 @@
     border-radius: 10px;
     font-size: 0.8rem;
     font-variant-numeric: tabular-nums;
+    margin-bottom: 16px;
   }
 
   .live-item {
@@ -356,8 +422,14 @@
 
   /* Responsive */
   @media (max-width: 700px) {
-    .gauges, .equivalents { grid-template-columns: 1fr; }
+    .gauges { grid-template-columns: 1fr; }
+    .equivalents { grid-template-columns: repeat(3, 1fr); }
     .live-strip { flex-wrap: wrap; }
+    .filter-bar { flex-direction: column; align-items: stretch; }
+  }
+
+  @media (max-width: 400px) {
+    .equivalents { grid-template-columns: repeat(2, 1fr); }
   }
 </style>
 </head>
@@ -365,13 +437,29 @@
 <div class="container">
 
 <header>
-  <div class="logo">carbon<span>proxy</span></div>
+  <div class="logo">
+    <div>carbon<span>proxy</span></div>
+    <div style="font-weight:400;font-size:0.65rem;color:var(--muted);margin-top:2px;">Carbon footprint tracking for self-hosted LLMs</div>
+  </div>
   <div class="header-actions">
     <div class="status"></div>
     <button class="btn" onclick="refreshAll()">Refresh</button>
     <button class="btn btn-primary" id="offsetBtn" onclick="manualOffset()">Offset Now</button>
   </div>
 </header>
+
+<!-- Filters -->
+<div class="filter-bar">
+  <div class="filter-group" id="timeFilter">
+    <button class="filter-btn active" data-range="today">Today</button>
+    <button class="filter-btn" data-range="7d">7D</button>
+    <button class="filter-btn" data-range="30d">30D</button>
+    <button class="filter-btn" data-range="all">All</button>
+  </div>
+  <select class="filter-select" id="sourceFilter">
+    <option value="">All Sources</option>
+  </select>
+</div>
 
 <!-- Hero Gauges -->
 <div class="gauges">
@@ -420,13 +508,21 @@
 </div>
 
 <!-- Equivalents -->
-<div class="equivalents" style="grid-template-columns: 1fr;">
-  <div class="equiv" style="justify-content: center;">
-    <div class="equiv-icon">&#127794;</div>
-    <div class="equiv-data">
-      <div class="equiv-number" id="eqTrees">0</div>
-      <div class="equiv-desc">trees/year needed to offset your emissions</div>
-    </div>
+<div class="equivalents">
+  <div class="equiv">
+    <div class="equiv-icon"><span class="mdi mdi-tree"></span></div>
+    <div class="equiv-number" id="eqTrees">0</div>
+    <div class="equiv-desc">trees/year to offset</div>
+  </div>
+  <div class="equiv">
+    <div class="equiv-icon"><span class="mdi mdi-cellphone"></span></div>
+    <div class="equiv-number" id="eqPhone">0</div>
+    <div class="equiv-desc">phone charges</div>
+  </div>
+  <div class="equiv">
+    <div class="equiv-icon"><span class="mdi mdi-magnify"></span></div>
+    <div class="equiv-number" id="eqSearch">0</div>
+    <div class="equiv-desc">Google searches</div>
   </div>
 </div>
 
@@ -447,9 +543,12 @@
 
 <!-- Live Power -->
 <div class="section">
-  <div class="section-header" onclick="toggleSection('livePower')">
-    <div class="section-title">Live Power</div>
-    <div class="section-toggle" id="livePower-arrow">&#9660;</div>
+  <div class="section-header">
+    <div class="section-title" onclick="toggleSection('livePower')" style="cursor:pointer">Live Power</div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button class="btn" id="liveToggle" onclick="toggleLiveChart()" style="font-size:0.72rem;padding:4px 10px;">Pause</button>
+      <div class="section-toggle" id="livePower-arrow" onclick="toggleSection('livePower')" style="cursor:pointer">&#9660;</div>
+    </div>
   </div>
   <div class="section-content" id="livePower">
     <div class="live-strip">
@@ -458,6 +557,9 @@
       <div class="live-item"><span class="live-label">Total</span> <span class="live-val" id="totalW">--</span></div>
       <div class="live-item"><span class="live-label">Source</span> <span class="live-val" id="pSource">--</span></div>
       <div class="live-item"><span class="live-label">Active</span> <span class="live-val" id="activeR">0</span></div>
+    </div>
+    <div class="chart-card">
+      <canvas id="powerChart" height="180"></canvas>
     </div>
   </div>
 </div>
@@ -469,6 +571,9 @@
     <div class="section-toggle" id="dailySection-arrow">&#9660;</div>
   </div>
   <div class="section-content" id="dailySection">
+    <div class="chart-card">
+      <canvas id="dailyChart" height="200"></canvas>
+    </div>
     <div class="table-card"><div class="table-scroll">
       <table>
         <thead><tr><th>Date</th><th>Source</th><th>Requests</th><th>Tokens</th><th>kWh</th><th>CO2 (kg)</th></tr></thead>
@@ -513,8 +618,15 @@
 </div>
 
 <script>
-const CIRC = 2 * Math.PI * 62; // 389.56
+const CIRC = 2 * Math.PI * 62;
+const MAX_POWER_POINTS = 120; // 2 minutes at 1s intervals
 
+// -- State --
+let activeRange = 'today';
+let activeSource = '';
+let liveChartEnabled = true;
+
+// -- Helpers --
 function esc(s) { const e = document.createElement('span'); e.textContent = s; return e.innerHTML; }
 function safeUrl(u) { try { const x = new URL(u); return (x.protocol==='https:'||x.protocol==='http:') ? x.href : ''; } catch(e) { return ''; } }
 function fmt(n, d=2) { return n == null || isNaN(n) ? '0' : Number(n).toFixed(d); }
@@ -528,6 +640,8 @@ function setGauge(id, pct) {
   document.getElementById(id).setAttribute('stroke-dashoffset', offset);
 }
 
+function logPct(val, base) { return val <= 0 ? 0 : Math.min(1, Math.log(1+val) / Math.log(1+base)); }
+
 function toggleSection(id) {
   const el = document.getElementById(id);
   const arrow = document.getElementById(id + '-arrow');
@@ -535,14 +649,195 @@ function toggleSection(id) {
   arrow.style.transform = el.classList.contains('collapsed') ? 'rotate(-90deg)' : '';
 }
 
+// -- Filters --
+function getTimeRange() {
+  const now = new Date();
+  if (activeRange === 'today') {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return { since: start.toISOString(), until: null };
+  } else if (activeRange === '7d') {
+    const start = new Date(now.getTime() - 7*24*60*60*1000);
+    return { since: start.toISOString(), until: null };
+  } else if (activeRange === '30d') {
+    const start = new Date(now.getTime() - 30*24*60*60*1000);
+    return { since: start.toISOString(), until: null };
+  }
+  return { since: null, until: null };
+}
+
+function buildQuery(extra={}) {
+  const range = getTimeRange();
+  const params = new URLSearchParams();
+  if (range.since) params.set('since', range.since);
+  if (range.until) params.set('until', range.until);
+  if (activeSource) params.set('source', activeSource);
+  for (const [k,v] of Object.entries(extra)) {
+    if (v != null) params.set(k, v);
+  }
+  const qs = params.toString();
+  return qs ? '?' + qs : '';
+}
+
+// Filter event listeners
+document.getElementById('timeFilter').addEventListener('click', (e) => {
+  const btn = e.target.closest('.filter-btn');
+  if (!btn) return;
+  document.querySelectorAll('#timeFilter .filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  activeRange = btn.dataset.range;
+  refreshAll();
+});
+
+document.getElementById('sourceFilter').addEventListener('change', (e) => {
+  activeSource = e.target.value;
+  refreshAll();
+});
+
+// -- Charts --
+const chartDefaults = {
+  responsive: true,
+  maintainAspectRatio: false,
+  animation: { duration: 300 },
+  plugins: { legend: { labels: { color: '#888', boxWidth: 12, padding: 16, font: { size: 11 } } } },
+  scales: {
+    x: { ticks: { color: '#888', font: { size: 10 } }, grid: { color: '#2e2e2e' } },
+    y: { ticks: { color: '#888', font: { size: 10 } }, grid: { color: '#2e2e2e' }, beginAtZero: true },
+  },
+};
+
+// Power chart
+const powerCtx = document.getElementById('powerChart').getContext('2d');
+const powerChart = new Chart(powerCtx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'CPU (W)', data: [], borderColor: '#6bb3ff', backgroundColor: 'rgba(107,179,255,0.1)', borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3 },
+      { label: 'GPU (W)', data: [], borderColor: '#bffb4f', backgroundColor: 'rgba(191,251,79,0.1)', borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3 },
+      { label: 'Total (W)', data: [], borderColor: '#ff6b6b', backgroundColor: 'rgba(255,107,107,0.05)', borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.3, borderDash: [4,2] },
+    ],
+  },
+  options: {
+    ...chartDefaults,
+    plugins: { ...chartDefaults.plugins, title: { display: false } },
+    scales: {
+      ...chartDefaults.scales,
+      x: { ...chartDefaults.scales.x, display: true, ticks: { ...chartDefaults.scales.x.ticks, maxTicksLimit: 8 } },
+      y: { ...chartDefaults.scales.y, title: { display: true, text: 'Watts', color: '#888', font: { size: 10 } } },
+    },
+  },
+});
+
+// Daily chart
+const dailyCtx = document.getElementById('dailyChart').getContext('2d');
+const dailyChart = new Chart(dailyCtx, {
+  type: 'bar',
+  data: { labels: [], datasets: [] },
+  options: {
+    ...chartDefaults,
+    animation: false,
+    plugins: { ...chartDefaults.plugins, title: { display: false } },
+    scales: {
+      ...chartDefaults.scales,
+      x: { ...chartDefaults.scales.x, stacked: true },
+      y: { ...chartDefaults.scales.y, stacked: true, title: { display: true, text: 'g CO2', color: '#888', font: { size: 10 } } },
+    },
+  },
+});
+
+const SOURCE_COLORS = [
+  '#bffb4f', '#6bb3ff', '#ff6b6b', '#ffb432', '#c084fc',
+  '#34d399', '#f472b6', '#fbbf24', '#67e8f9', '#a78bfa',
+];
+
+function getSourceColor(index) {
+  return SOURCE_COLORS[index % SOURCE_COLORS.length];
+}
+
+// -- Data refresh --
+async function loadSources() {
+  try {
+    const sources = await fetch('/carbon/sources').then(r => r.json());
+    const select = document.getElementById('sourceFilter');
+    const current = select.value;
+    select.innerHTML = '<option value="">All Sources</option>';
+    sources.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s;
+      if (s === current) opt.selected = true;
+      select.appendChild(opt);
+    });
+  } catch(e) {}
+}
+
+function toggleLiveChart() {
+  liveChartEnabled = !liveChartEnabled;
+  const btn = document.getElementById('liveToggle');
+  btn.textContent = liveChartEnabled ? 'Pause' : 'Resume';
+  btn.style.borderColor = liveChartEnabled ? '' : 'var(--primary)';
+  btn.style.color = liveChartEnabled ? '' : 'var(--primary)';
+}
+
+function updatePowerChart(live) {
+  if (!liveChartEnabled) return;
+
+  const now = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const cpu = live.cpu_watts || 0;
+  const gpu = live.gpu_watts || 0;
+  const total = live.total_watts || 0;
+
+  powerChart.data.labels.push(now);
+  powerChart.data.datasets[0].data.push(cpu);
+  powerChart.data.datasets[1].data.push(gpu);
+  powerChart.data.datasets[2].data.push(total);
+
+  // Trim to max points
+  if (powerChart.data.labels.length > MAX_POWER_POINTS) {
+    powerChart.data.labels.shift();
+    powerChart.data.datasets.forEach(ds => ds.data.shift());
+  }
+
+  powerChart.update('none');
+}
+
+function updateDailyChart(dailyData) {
+  // Group by date, split by source
+  const dateMap = {};
+  const sourceSet = new Set();
+
+  dailyData.forEach(row => {
+    const date = row.date || 'unknown';
+    const source = row.source || 'unknown';
+    sourceSet.add(source);
+    if (!dateMap[date]) dateMap[date] = {};
+    dateMap[date][source] = (row.co2_kg || 0) * 1000; // convert to grams
+  });
+
+  const dates = Object.keys(dateMap).sort();
+  const sources = Array.from(sourceSet).sort();
+
+  dailyChart.data.labels = dates;
+  dailyChart.data.datasets = sources.map((source, i) => ({
+    label: source,
+    data: dates.map(d => dateMap[d][source] || 0),
+    backgroundColor: getSourceColor(i) + '88',
+    borderColor: getSourceColor(i),
+    borderWidth: 1,
+    borderRadius: 3,
+  }));
+
+  dailyChart.update('none');
+}
+
 async function refreshAll() {
   const [summary, equiv, balance, live, daily, reqs, offsets] = await Promise.all([
-    fetch('/carbon/summary').then(r=>r.json()).catch(()=>({})),
-    fetch('/carbon/equivalents').then(r=>r.json()).catch(()=>({})),
+    fetch('/carbon/summary' + buildQuery()).then(r=>r.json()).catch(()=>({})),
+    fetch('/carbon/equivalents' + buildQuery()).then(r=>r.json()).catch(()=>({})),
     fetch('/carbon/balance').then(r=>r.json()).catch(()=>({})),
     fetch('/carbon/live').then(r=>r.json()).catch(()=>({})),
-    fetch('/carbon/daily').then(r=>r.json()).catch(()=>[]),
-    fetch('/carbon/requests?limit=50').then(r=>r.json()).catch(()=>[]),
+    fetch('/carbon/daily' + buildQuery()).then(r=>r.json()).catch(()=>[]),
+    fetch('/carbon/requests' + buildQuery({limit:50})).then(r=>r.json()).catch(()=>[]),
     fetch('/carbon/offsets?limit=20').then(r=>r.json()).catch(()=>[]),
   ]);
 
@@ -553,21 +848,22 @@ async function refreshAll() {
   document.getElementById('gEnergy').textContent = fmtShort(kwh);
   document.getElementById('gEmissions').textContent = fmtShort(co2);
   document.getElementById('gRequests').textContent = totalReqs;
-  // Animate gauges (scale relative, cap at 100%)
-  setGauge('gaugeEnergy', Math.min(1, kwh / Math.max(kwh, 0.001)));
-  setGauge('gaugeEmissions', Math.min(1, co2 / Math.max(co2, 0.001)));
-  setGauge('gaugeRequests', Math.min(1, totalReqs / Math.max(totalReqs, 1)));
+  setGauge('gaugeEnergy', logPct(kwh, 10));
+  setGauge('gaugeEmissions', logPct(co2, 1000));
+  setGauge('gaugeRequests', logPct(totalReqs, 1000));
 
   // Equivalents
-  const treesVal = equiv.trees_to_offset_yearly || 0;
-  document.getElementById('eqTrees').textContent = treesVal < 0.0001 && treesVal > 0 ? '<0.0001' : fmt(treesVal, 4);
+  function fmtEq(v) { return v < 0.01 && v > 0 ? '<0.01' : v >= 1000 ? (v/1000).toFixed(1)+'k' : fmt(v, v < 1 ? 2 : 1); }
+  document.getElementById('eqTrees').textContent = fmtEq(equiv.trees_to_offset_yearly || 0);
+  document.getElementById('eqPhone').textContent = fmtEq(equiv.smartphone_charges || 0);
+  document.getElementById('eqSearch').textContent = fmtEq(equiv.google_searches || 0);
 
   // Balance
   const emitted = balance.total_co2_grams || 0;
-  const offset = balance.total_offset_grams || 0;
+  const off = balance.total_offset_grams || 0;
   const bal = balance.balance_grams || 0;
   const trees = balance.trees_planted || 0;
-  const pct = emitted > 0 ? Math.min(100, (offset / emitted) * 100) : 0;
+  const pct = emitted > 0 ? Math.min(100, (off / emitted) * 100) : 0;
 
   const balBar = document.getElementById('balanceBar');
   balBar.style.width = pct + '%';
@@ -577,24 +873,28 @@ async function refreshAll() {
     bal > 0 ? `${fmt(bal,2)}g CO2 emitted` : 'Net zero';
   document.getElementById('balanceText').style.color = bal > 0 ? 'var(--red)' : 'var(--primary)';
   document.getElementById('balanceLeft').textContent =
-    `${fmt(offset,2)}g offset` + (trees > 0 ? ` | ${trees} trees` : '');
+    `${fmt(off,2)}g offset` + (trees > 0 ? ` | ${trees} trees` : '');
   document.getElementById('balanceRight').textContent = `${fmt(pct,0)}% covered`;
 
-  // Live
+  // Live power
   document.getElementById('cpuW').textContent = fmt(live.cpu_watts,1) + 'W';
   document.getElementById('gpuW').textContent = fmt(live.gpu_watts,1) + 'W';
   document.getElementById('totalW').textContent = fmt(live.total_watts,1) + 'W';
   document.getElementById('pSource').textContent = `${live.power_source} (${live.cpu_method}/${live.gpu_method})`;
   document.getElementById('activeR').textContent = live.active_requests || 0;
+  updatePowerChart(live);
 
-  // Daily
+  // Daily chart
+  updateDailyChart(daily);
+
+  // Daily table
   const dTb = document.getElementById('dailyTb');
-  dTb.innerHTML = daily.length ? daily.slice(0,20).map(r => `<tr>
+  dTb.innerHTML = daily.length ? daily.slice(0,30).map(r => `<tr>
     <td>${esc(r.date||'')}</td><td>${esc(r.source)}</td><td>${r.requests}</td>
     <td>${(r.total_tokens||0).toLocaleString()}</td><td>${fmt(r.energy_kwh,4)}</td><td>${fmt(r.co2_kg,6)}</td>
   </tr>`).join('') : '<tr><td colspan="6" style="color:var(--muted);text-align:center;">No data</td></tr>';
 
-  // Requests
+  // Requests table
   const rTb = document.getElementById('reqTb');
   rTb.innerHTML = reqs.length ? reqs.map(r => `<tr>
     <td>${fmtTime(r.timestamp)}</td><td>${esc(r.source)}</td><td>${esc(r.model)}</td>
@@ -602,7 +902,7 @@ async function refreshAll() {
     <td>${fmt(r.energy_joules,1)}J</td><td>${fmt(r.co2_grams,4)}g</td><td>${srcTag(r.power_source)}</td>
   </tr>`).join('') : '<tr><td colspan="9" style="color:var(--muted);text-align:center;">No data</td></tr>';
 
-  // Offsets
+  // Offsets table
   const oTb = document.getElementById('offTb');
   oTb.innerHTML = offsets.length ? offsets.map(r => `<tr>
     <td>${fmtTime(r.timestamp)}</td><td>${esc(r.provider)}</td><td>${fmt(r.co2_grams_offset,2)}</td>
@@ -649,8 +949,11 @@ async function manualOffset() {
   }
 }
 
+// -- Init --
+loadSources();
 refreshAll();
-setInterval(refreshAll, 10000);
+setInterval(refreshAll, 3000);       // Data + power chart every 3s
+setInterval(loadSources, 60000);     // Refresh source list every minute
 </script>
 </body>
 </html>

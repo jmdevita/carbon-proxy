@@ -11,11 +11,16 @@ def identify(request: Request, body: dict | None = None) -> str:
         if source:
             return source
 
-    # 2. user field in request body
+    # 2. X-Carbon-Source custom header
+    carbon_source = request.headers.get("x-carbon-source", "").strip()
+    if carbon_source:
+        return carbon_source[:50]
+
+    # 3. user field in request body
     if body and body.get("user"):
         return str(body["user"])
 
-    # 3. User-Agent
+    # 4. User-Agent
     ua = request.headers.get("user-agent", "")
     if ua:
         # Truncate to something readable

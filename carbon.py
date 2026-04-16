@@ -74,6 +74,7 @@ TREE_CO2_KG_PER_YEAR = 22.0     # 1 tree absorbs ~22kg CO2/year
 CAR_CO2_G_PER_KM = 120.0        # average car
 SMARTPHONE_CO2_G = 8.0           # per charge cycle
 STREAMING_CO2_G_PER_HOUR = 36.0  # video streaming
+GOOGLE_SEARCH_CO2_G = 0.2       # per search (EPA/Google)
 
 
 def equivalents(co2_grams: float) -> dict:
@@ -85,4 +86,5 @@ def equivalents(co2_grams: float) -> dict:
         "km_driven": round(co2_grams / CAR_CO2_G_PER_KM, 2),
         "smartphone_charges": round(co2_grams / SMARTPHONE_CO2_G, 2),
         "streaming_hours": round(co2_grams / STREAMING_CO2_G_PER_HOUR, 2),
+        "google_searches": round(co2_grams / GOOGLE_SEARCH_CO2_G, 1),
     }

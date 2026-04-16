@@ -288,6 +288,15 @@ def get_offsets(limit: int = 100, offset: int = 0) -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def get_sources() -> list[str]:
+    with _db_lock:
+        conn = _get_conn()
+        rows = conn.execute(
+            "SELECT DISTINCT source FROM requests ORDER BY source"
+        ).fetchall()
+        return [row["source"] for row in rows]
+
+
 def close_db():
     global _conn
     with _db_lock:

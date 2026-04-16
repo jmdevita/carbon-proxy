@@ -11,6 +11,7 @@ logger = logging.getLogger("carbon-proxy")
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from config import settings
 from proxy import router as proxy_router, init_client, close_client
@@ -47,6 +48,9 @@ async def health():
 async def dashboard():
     return FileResponse(STATIC_DIR / "dashboard.html", media_type="text/html")
 
+
+# Serve static assets (favicon, etc.)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # Mount reporting routes before proxy so /carbon/* takes priority
 app.include_router(reporting_router)

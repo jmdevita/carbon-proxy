@@ -66,6 +66,11 @@ async def get_equivalents(
     return equivalents(data["total_co2_grams"])
 
 
+@router.get("/sources")
+async def sources():
+    return await asyncio.to_thread(db.get_sources)
+
+
 @router.get("/live")
 async def live():
     return power_monitor.get_current_power()
