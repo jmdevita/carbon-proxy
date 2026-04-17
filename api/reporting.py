@@ -3,10 +3,10 @@ import asyncio
 from fastapi import APIRouter, Query, HTTPException, Request
 
 import db
-from carbon import equivalents
+from energy.carbon import equivalents
 from config import settings
-from power import monitor as power_monitor
-from offsets import purchase_offset
+from energy.power import monitor as power_monitor
+from api.offsets import purchase_offset
 
 router = APIRouter(prefix="/carbon", tags=["carbon"])
 

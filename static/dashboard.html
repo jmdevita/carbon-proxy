@@ -512,7 +512,7 @@
   <div class="equiv">
     <div class="equiv-icon"><span class="mdi mdi-tree"></span></div>
     <div class="equiv-number" id="eqTrees">0</div>
-    <div class="equiv-desc">trees/year to offset</div>
+    <div class="equiv-desc">trees/year to neutralize</div>
   </div>
   <div class="equiv">
     <div class="equiv-icon"><span class="mdi mdi-cellphone"></span></div>
@@ -529,7 +529,7 @@
 <!-- Offset Balance -->
 <div class="balance-section">
   <div class="balance-header">
-    <div class="balance-title">Offset Balance</div>
+    <div class="balance-title">Carbon Debt</div>
     <div class="balance-amount" id="balanceText">--</div>
   </div>
   <div class="balance-bar-bg">
@@ -870,11 +870,13 @@ async function refreshAll() {
   balBar.className = 'balance-bar-fill' + (bal > 0 ? ' deficit' : '');
 
   document.getElementById('balanceText').textContent =
-    bal > 0 ? `${fmt(bal,2)}g CO2 emitted` : 'Net zero';
+    bal > 0 ? `${fmt(bal,2)}g remaining debt`
+    : bal < 0 ? `Carbon negative (+${fmt(Math.abs(bal),2)}g surplus)`
+    : 'Net zero';
   document.getElementById('balanceText').style.color = bal > 0 ? 'var(--red)' : 'var(--primary)';
   document.getElementById('balanceLeft').textContent =
-    `${fmt(off,2)}g offset` + (trees > 0 ? ` | ${trees} trees` : '');
-  document.getElementById('balanceRight').textContent = `${fmt(pct,0)}% covered`;
+    `${fmt(off,2)}g neutralized` + (trees > 0 ? ` | ${trees} trees` : '');
+  document.getElementById('balanceRight').textContent = `${fmt(pct,0)}% neutralized`;
 
   // Live power
   document.getElementById('cpuW').textContent = fmt(live.cpu_watts,1) + 'W';

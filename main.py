@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -14,10 +15,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
-from proxy import router as proxy_router, init_client, close_client
-from reporting import router as reporting_router
+from core.proxy import router as proxy_router, init_client, close_client
+from api.reporting import router as reporting_router
 import db
-from power import monitor as power_monitor
+from api import trmnl
+from energy.power import monitor as power_monitor
 
 
 @asynccontextmanager
@@ -26,7 +28,16 @@ async def lifespan(app: FastAPI):
     db.init_db()
     init_client()
     power_monitor.start()
+
+    trmnl_task = None
+    if settings.trmnl_enabled and settings.trmnl_plugin_uuid:
+        trmnl_task = asyncio.create_task(trmnl.push_loop())
+        logger.info("TRMNL push enabled (every %ds)", settings.trmnl_push_interval)
+
     yield
+
+    if trmnl_task:
+        trmnl_task.cancel()
     power_monitor.stop()
     await close_client()
     db.close_db()

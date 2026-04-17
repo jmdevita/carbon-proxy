@@ -9,10 +9,10 @@ from starlette.responses import StreamingResponse, Response
 from starlette.background import BackgroundTask
 
 from config import settings
-from client_id import identify
+from core.client_id import identify
 import db
-from power import monitor as power_monitor
-from carbon import joules_to_kwh, calculate_co2
+from energy.power import monitor as power_monitor
+from energy.carbon import joules_to_kwh, calculate_co2
 
 logger = logging.getLogger("carbon-proxy.proxy")
 

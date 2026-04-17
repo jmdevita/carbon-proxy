@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     tree_nation_species_id: int = 0  # optional, cheapest if 0
     tree_nation_base_url: str = "https://tree-nation.com/api"
 
+    # TRMNL e-ink display
+    trmnl_enabled: bool = False
+    trmnl_plugin_uuid: str = ""
+    trmnl_push_interval: int = 300  # seconds
+
     @field_validator("power_sample_hz")
     @classmethod
     def validate_sample_hz(cls, v):

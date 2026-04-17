@@ -1,0 +1,92 @@
+<style>
+  .cp { display: flex; flex-direction: column; justify-content: space-between; height: 100%; padding: 16px 20px; font-family: sans-serif; }
+  .cp-row { display: flex; text-align: center; align-items: center; }
+  .cp-row > div { flex: 1; display: flex; flex-direction: column; align-items: center; }
+  .cp-val { font-size: 28px; font-weight: 700; display: block; }
+  .cp-val-lg { font-size: 38px; font-weight: 700; display: block; }
+  .cp-lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.5; display: block; margin-top: 2px; }
+  .cp-hr { border: none; border-top: 1px solid rgba(0,0,0,0.15); margin: 0; }
+  .cp-debt-head { display: flex; justify-content: space-between; align-items: baseline; width: 100%; }
+  .cp-bar-bg { width: 100%; height: 26px; background: rgba(0,0,0,0.1); border-radius: 4px; overflow: hidden; position: relative; margin: 4px 0; }
+  .cp-bar-fill { height: 100%; background: #000; border-radius: 4px; }
+  .cp-bar-text { position: absolute; top: 50%; transform: translateY(-50%); left: 10px; font-size: 12px; font-weight: 600; color: #fff; }
+  .cp-debt-meta { display: flex; justify-content: space-between; width: 100%; font-size: 12px; opacity: 0.5; }
+  .cp-equiv { display: flex; justify-content: center; gap: 24px; }
+  .cp-eq { font-size: 12px; opacity: 0.6; }
+  .cp-eq b { font-size: 16px; font-weight: 700; opacity: 1; }
+</style>
+
+<div class="view view--full">
+  <div class="title_bar">
+    <span class="title">Carbon Proxy</span>
+    <span class="instance">{{ updated_at | date: "%b %d, %H:%M" }}</span>
+  </div>
+
+  <div class="cp">
+
+    <div class="cp-row" style="padding-top:8px;">
+      <div>
+        <span class="cp-val-lg">{{ co2_grams }}g</span>
+        <span class="cp-lbl">CO2 Emitted</span>
+      </div>
+      <div>
+        <span class="cp-val">{{ energy_kwh }}</span>
+        <span class="cp-lbl">kWh Energy</span>
+      </div>
+      <div>
+        <span class="cp-val">{{ total_requests }}</span>
+        <span class="cp-lbl">Requests</span>
+      </div>
+      <div>
+        <span class="cp-val">{{ total_tokens }}</span>
+        <span class="cp-lbl">Tokens</span>
+      </div>
+    </div>
+
+    <hr class="cp-hr">
+
+    <div>
+      <div class="cp-debt-head">
+        <span class="cp-lbl" style="margin:0;">Carbon Debt</span>
+        <span class="cp-val">{{ neutralized_pct }}%</span>
+      </div>
+      <div class="cp-bar-bg">
+        {% if is_surplus %}
+        <div class="cp-bar-fill" style="width:100%;"><span class="cp-bar-text">Carbon negative (+{{ surplus }}g surplus)</span></div>
+        {% elsif is_net_zero %}
+        <div class="cp-bar-fill" style="width:100%;"><span class="cp-bar-text">Net zero</span></div>
+        {% else %}
+        <div class="cp-bar-fill" style="width:{{ neutralized_pct }}%;"><span class="cp-bar-text">{{ neutralized_grams }}g neutralized</span></div>
+        {% endif %}
+      </div>
+      <div class="cp-debt-meta">
+        <span>{{ neutralized_grams }}g neutralized of {{ co2_grams }}g emitted</span>
+        {% if is_surplus or is_net_zero %}<span>No remaining debt</span>{% else %}<span>{{ debt_grams }}g remaining debt</span>{% endif %}
+      </div>
+    </div>
+
+    <div class="cp-row">
+      <div>
+        <span class="cp-val">{{ trees_planted }}</span>
+        <span class="cp-lbl">Trees Planted</span>
+      </div>
+      <div>
+        <span class="cp-val">{{ total_cost }}</span>
+        <span class="cp-lbl">Total Spent</span>
+      </div>
+      <div>
+        <span class="cp-val">{{ phone_charges }}</span>
+        <span class="cp-lbl">Phone Charges</span>
+      </div>
+    </div>
+
+    <hr class="cp-hr">
+
+    <div class="cp-equiv">
+      <span class="cp-eq"><b>{{ google_searches }}</b> Google searches</span>
+      <span class="cp-eq"><b>{{ phone_charges }}</b> phone charges</span>
+      <span class="cp-eq"><b>{{ trees_to_neutralize }}</b> trees/yr</span>
+    </div>
+
+  </div>
+</div>
