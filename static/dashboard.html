@@ -148,8 +148,9 @@
 
   /* Hero gauges */
   .gauges {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 24px;
     margin-bottom: 48px;
   }
@@ -844,6 +845,7 @@ async function refreshAll() {
   // Show energy gauge only when carbon intensity is dynamic (electricityMap configured)
   const showEnergy = live.dynamic_carbon_intensity || false;
   document.getElementById('energyGauge').style.display = showEnergy ? '' : 'none';
+  document.querySelector('.gauges').style.gap = showEnergy ? '24px' : '64px';
 
   // Gauges
   const kwh = summary.total_energy_kwh || 0;
