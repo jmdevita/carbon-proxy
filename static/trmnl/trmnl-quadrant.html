@@ -1,0 +1,54 @@
+<style>
+  .cp-val { font-size: 16px; font-weight: 700; }
+  .cp-val-lg { font-size: 24px; font-weight: 700; }
+  .cp { display: flex; flex-direction: column; justify-content: space-between; min-height: 190px; padding: 8px 12px; }
+  .cp-metric { flex: 1; text-align: center; }
+  .cp-lbl { font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.5; display: block; margin-top: 2px; border-bottom: 1px dotted #000; padding-bottom: 2px; }
+  .cp-bar-bg { height: 14px; overflow: hidden; position: relative; border: 2px solid #000; border-radius: 3px; margin: 2px 0; }
+  .cp-bar-fill { height: 100%; background: #000; border-radius: 1px; }
+  .cp-bar-text { position: absolute; top: 50%; transform: translateY(-50%); left: 6px; font-size: 7px; font-weight: 600; color: #fff; }
+</style>
+
+<div class="view">
+  <div class="title_bar">
+    <span class="title">Carbon Proxy</span>
+  </div>
+
+  <div class="cp">
+
+    <div class="flex flex--bottom">
+      <div class="cp-metric">
+        <span class="cp-val-lg">{{ co2_grams }}g</span>
+        <span class="cp-lbl">CO2</span>
+      </div>
+      <div class="cp-metric">
+        <span class="cp-val">{{ total_requests }}</span>
+        <span class="cp-lbl">Requests</span>
+      </div>
+    </div>
+
+    <div class="stretch-x">
+      <div class="flex flex--between flex--bottom stretch-x">
+        <span class="cp-lbl" style="border:none;">Carbon Debt</span>
+        <span class="cp-val">{{ neutralized_pct }}%</span>
+      </div>
+      <div class="cp-bar-bg stretch-x">
+        {% if is_surplus %}
+        <div class="cp-bar-fill" style="width:100%;"><span class="cp-bar-text">Negative</span></div>
+        {% elsif is_net_zero %}
+        <div class="cp-bar-fill" style="width:100%;"><span class="cp-bar-text">Net zero</span></div>
+        {% else %}
+        <div class="cp-bar-fill" style="width:{{ neutralized_pct }}%;"></div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="flex flex--bottom">
+      <div class="cp-metric">
+        <span class="cp-val">{{ total_tokens }}</span>
+        <span class="cp-lbl">Tokens</span>
+      </div>
+    </div>
+
+  </div>
+</div>

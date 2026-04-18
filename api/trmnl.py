@@ -47,6 +47,9 @@ def _build_payload(summary: dict, balance: dict, power: dict) -> dict:
             "google_searches": eq.get("google_searches", 0),
             "phone_charges": eq.get("smartphone_charges", 0),
             "trees_to_neutralize": eq.get("trees_to_offset_yearly", 0),
+            "dynamic_carbon_intensity": bool(
+                settings.electricitymap_api_key and settings.electricitymap_zone
+            ),
             "power_watts": power.get("total_watts", 0),
             "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }

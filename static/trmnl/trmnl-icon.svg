@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Tree canopy -->
+  <circle cx="256" cy="190" r="170" fill="#fff"/>
+  <circle cx="155" cy="255" r="115" fill="#fff"/>
+  <circle cx="357" cy="255" r="115" fill="#fff"/>
+  <circle cx="190" cy="170" r="105" fill="#fff"/>
+  <circle cx="322" cy="170" r="105" fill="#fff"/>
+
+  <!-- Trunk - same width as circuit trace for uniform look -->
+  <rect x="251" y="355" width="10" height="105" fill="#fff"/>
+
+  <!-- Ground -->
+  <rect x="100" y="450" width="312" height="14" rx="7" fill="#fff"/>
+
+  <!-- Circuit trace - central line extending from top through canopy and down through trunk -->
+  <path d="M256 85 L256 455" stroke="#000" stroke-width="9" stroke-linecap="round" fill="none"/>
+
+  <!-- Right branches -->
+  <path d="M256 145 L370 110" stroke="#000" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M256 200 L400 175" stroke="#000" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M256 255 L395 250" stroke="#000" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M256 305 L360 310" stroke="#000" stroke-width="6" stroke-linecap="round" fill="none"/>
+
+  <!-- Left branches -->
+  <path d="M256 135 L160 105" stroke="#000" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M256 195 L135 170" stroke="#000" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M256 255 L130 245" stroke="#000" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M256 305 L165 310" stroke="#000" stroke-width="6" stroke-linecap="round" fill="none"/>
+
+  <!-- Circuit nodes -->
+  <circle cx="370" cy="110" r="10" fill="#000"/>
+  <circle cx="400" cy="175" r="10" fill="#000"/>
+  <circle cx="395" cy="250" r="10" fill="#000"/>
+  <circle cx="360" cy="310" r="10" fill="#000"/>
+  <circle cx="160" cy="105" r="10" fill="#000"/>
+  <circle cx="135" cy="170" r="10" fill="#000"/>
+  <circle cx="130" cy="245" r="10" fill="#000"/>
+  <circle cx="165" cy="310" r="10" fill="#000"/>
+
+  <!-- Top node -->
+  <circle cx="256" cy="85" r="12" fill="#000"/>
+</svg>

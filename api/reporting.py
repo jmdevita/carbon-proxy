@@ -73,7 +73,11 @@ async def sources():
 
 @router.get("/live")
 async def live():
-    return power_monitor.get_current_power()
+    data = power_monitor.get_current_power()
+    data["dynamic_carbon_intensity"] = bool(
+        settings.electricitymap_api_key and settings.electricitymap_zone
+    )
+    return data
 
 
 @router.get("/balance")
