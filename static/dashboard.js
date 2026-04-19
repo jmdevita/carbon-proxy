@@ -10,7 +10,8 @@ let liveChartEnabled = true;
 function esc(s) { const e = document.createElement('span'); e.textContent = s; return e.innerHTML; }
 function safeUrl(u) { try { const x = new URL(u); return (x.protocol==='https:'||x.protocol==='http:') ? x.href : ''; } catch(e) { return ''; } }
 function fmt(n, d=2) { return n == null || isNaN(n) ? '0' : Number(n).toFixed(d); }
-function fmtShort(n) { if (n >= 1000) return (n/1000).toFixed(1)+'k'; return n < 0.01 && n > 0 ? n.toExponential(1) : fmt(n, n < 1 ? 4 : 1); }
+const _compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+function fmtShort(n) { if (n < 0.01 && n > 0) return n.toExponential(1); return n < 1000 ? fmt(n, n < 1 ? 4 : 1) : _compact.format(n); }
 function fmtTime(iso) { if (!iso) return '--'; return new Date(iso).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
 function fmtDur(ms) { return ms < 1000 ? ms+'ms' : (ms/1000).toFixed(1)+'s'; }
 function srcTag(s) { return `<span class="tag tag-${s||'none'}">${s||'none'}</span>`; }
