@@ -1090,7 +1090,10 @@ async function fetchQuote() {
     let html = '';
     for (const q of d.quotes) {
       const cost = q.cost_cents ? '$' + (q.cost_cents / 100).toFixed(2) : 'Pre-funded';
-      html += `<div class="modal-quote-row"><span>${esc(q.provider)}</span><span>${q.amount_kg} kg</span></div>`;
+      const requestedG = parseFloat(document.getElementById('offsetAmount').value);
+      const roundedUp = q.amount_kg * 1000 > requestedG;
+      const kgLabel = roundedUp ? `${q.amount_kg} kg (rounded up from ${requestedG}g)` : `${q.amount_kg} kg`;
+      html += `<div class="modal-quote-row"><span>${esc(q.provider)}</span><span>${kgLabel}</span></div>`;
       html += `<div class="modal-quote-row"><span>Estimated cost</span><span class="modal-quote-cost">${cost}</span></div>`;
     }
     document.getElementById('quoteDetails').innerHTML = html;

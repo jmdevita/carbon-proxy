@@ -1,5 +1,6 @@
 import logging
 import math
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -8,6 +9,11 @@ from config import settings
 import db
 
 logger = logging.getLogger("carbon-proxy.offsets")
+
+# Cached CNaught per-kg rate (cents)
+_cached_rate_cents: int | None = None
+_cache_time: float = 0
+_QUOTE_CACHE_TTL = 1800  # 30 minutes
 
 
 @dataclass
@@ -106,17 +112,18 @@ class QuoteResult:
     currency: str
 
 
-async def quote_cnaught(co2_grams: float) -> QuoteResult:
-    """Get a price quote from CNaught without purchasing."""
-    if not settings.cnaught_api_key:
-        raise ValueError("CNAUGHT_API_KEY not configured")
+async def _fetch_cnaught_rate() -> int:
+    """Fetch the per-kg rate from CNaught (cents), with 30-min cache."""
+    global _cached_rate_cents, _cache_time
 
-    amount_kg = max(1, math.ceil(co2_grams / 1000))
+    now = time.monotonic()
+    if _cached_rate_cents is not None and (now - _cache_time) < _QUOTE_CACHE_TTL:
+        return _cached_rate_cents
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             f"{settings.cnaught_base_url}/quotes",
-            json={"amount_kg": amount_kg},
+            json={"amount_kg": 1},
             headers={
                 "Authorization": f"Bearer {settings.cnaught_api_key}",
                 "Content-Type": "application/json",
@@ -126,11 +133,26 @@ async def quote_cnaught(co2_grams: float) -> QuoteResult:
         resp.raise_for_status()
         data = resp.json()
 
+    rate = data.get("price_usd_cents", 0)
+    _cached_rate_cents = rate
+    _cache_time = now
+    logger.info("Updated CNaught rate: %d cents/kg (cached 30m)", rate)
+    return rate
+
+
+async def quote_cnaught(co2_grams: float) -> QuoteResult:
+    """Get a price quote from CNaught without purchasing."""
+    if not settings.cnaught_api_key:
+        raise ValueError("CNAUGHT_API_KEY not configured")
+
+    amount_kg = max(1, math.ceil(co2_grams / 1000))
+    rate_cents = await _fetch_cnaught_rate()
+
     return QuoteResult(
         provider="cnaught",
         co2_grams=amount_kg * 1000,
         amount_kg=amount_kg,
-        cost_cents=data.get("price_usd_cents", 0),
+        cost_cents=rate_cents * amount_kg,
         currency="USD",
     )
 
