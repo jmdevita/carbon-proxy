@@ -6,7 +6,7 @@ import db
 from energy.carbon import equivalents
 from config import settings
 from energy.power import monitor as power_monitor
-from api.offsets import purchase_offset
+from api.offsets import purchase_offset, get_quote
 
 router = APIRouter(prefix="/carbon", tags=["carbon"])
 
@@ -95,6 +95,34 @@ async def offset_history(
     return await asyncio.to_thread(db.get_offsets, limit, offset)
 
 
+@router.get("/quote")
+async def offset_quote(
+    co2_grams: float | None = Query(None, description="CO2 in grams. If omitted, quotes current balance."),
+):
+    """Get a price quote for offsetting without purchasing."""
+    if co2_grams is None:
+        bal = await asyncio.to_thread(db.get_balance)
+        co2_grams = bal["balance_grams"]
+
+    if co2_grams <= 0:
+        return {"co2_grams": 0, "quotes": []}
+
+    quotes = await get_quote(co2_grams)
+    return {
+        "co2_grams": co2_grams,
+        "quotes": [
+            {
+                "provider": q.provider,
+                "co2_grams": q.co2_grams,
+                "amount_kg": q.amount_kg,
+                "cost_cents": q.cost_cents,
+                "currency": q.currency,
+            }
+            for q in quotes
+        ],
+    }
+
+
 @router.post("/offset")
 async def manual_offset(
     request: Request,
@@ -109,13 +137,13 @@ async def manual_offset(
         raise HTTPException(401, "Invalid or missing offset API key")
 
     provider = settings.offset_provider
-    if provider not in ("patch", "tree-nation", "both"):
+    if provider not in ("cnaught", "tree-nation", "both"):
         raise HTTPException(400, "No offset provider configured")
 
     # Check that the selected provider(s) have API keys
     missing = []
-    if provider in ("patch", "both") and not settings.patch_api_key:
-        missing.append("PATCH_API_KEY")
+    if provider in ("cnaught", "both") and not settings.cnaught_api_key:
+        missing.append("CNAUGHT_API_KEY")
     if provider in ("tree-nation", "both") and not settings.tree_nation_api_key:
         missing.append("TREE_NATION_API_KEY")
     if missing:

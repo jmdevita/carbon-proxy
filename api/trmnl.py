@@ -13,6 +13,21 @@ logger = logging.getLogger("carbon-proxy.trmnl")
 
 TRMNL_URL = "https://trmnl.com/api/custom_plugins"
 
+# Rotating equivalency sets — alternates each push cycle
+_eq_cycle = 0
+_EQ_SETS = [
+    lambda eq, green: [
+        {"label": "Cars Off Road*" if green else "Cars On Road*", "value": eq.get("cars_per_year", 0)},
+        {"label": "Homes Offset*" if green else "Homes Energy*", "value": eq.get("homes_energy_per_year", 0)},
+        {"label": "Flights Offset" if green else "Flights LA-NYC", "value": eq.get("flights_la_nyc", 0)},
+    ],
+    lambda eq, green: [
+        {"label": "Trees/Yr Offset" if green else "Trees/Yr Needed", "value": eq.get("trees_to_offset_yearly", 0)},
+        {"label": "Charges Offset" if green else "Phone Charges", "value": eq.get("smartphone_charges", 0)},
+        {"label": "Searches Offset" if green else "Google Searches", "value": eq.get("google_searches", 0)},
+    ],
+]
+
 
 def _format_tokens(n: int) -> str:
     if n >= 1_000_000:
@@ -23,12 +38,18 @@ def _format_tokens(n: int) -> str:
 
 
 def _build_payload(summary: dict, balance: dict, power: dict) -> dict:
+    global _eq_cycle
     eq = equivalents(summary.get("total_co2_grams", 0))
 
     emitted = balance.get("total_co2_grams", 0)
     neutralized = balance.get("total_offset_grams", 0)
     debt = balance.get("balance_grams", 0)
     pct = min(round((neutralized / emitted) * 100) if emitted > 0 else 0, 999)
+    is_green = debt < 0
+
+    # Rotating equivalency set
+    eq_set = _EQ_SETS[_eq_cycle % len(_EQ_SETS)](eq, is_green)
+    _eq_cycle += 1
 
     return {
         "merge_variables": {
@@ -47,6 +68,15 @@ def _build_payload(summary: dict, balance: dict, power: dict) -> dict:
             "google_searches": eq.get("google_searches", 0),
             "phone_charges": eq.get("smartphone_charges", 0),
             "trees_to_neutralize": eq.get("trees_to_offset_yearly", 0),
+            "cars_per_year": eq.get("cars_per_year", 0),
+            "homes_energy_per_year": eq.get("homes_energy_per_year", 0),
+            "flights_la_nyc": eq.get("flights_la_nyc", 0),
+            "eq1_label": eq_set[0]["label"],
+            "eq1_value": eq_set[0]["value"],
+            "eq2_label": eq_set[1]["label"],
+            "eq2_value": eq_set[1]["value"],
+            "eq3_label": eq_set[2]["label"],
+            "eq3_value": eq_set[2]["value"],
             "dynamic_carbon_intensity": bool(
                 settings.electricitymap_api_key and settings.electricitymap_zone
             ),

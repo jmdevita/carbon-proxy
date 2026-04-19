@@ -28,16 +28,17 @@ class Settings(BaseSettings):
     tdp_gpu_watts: float = 0.0
 
     # Offset purchasing
-    # Provider: "patch", "tree-nation", "both"
-    offset_provider: str = "patch"
+    # Provider: "cnaught", "tree-nation", or "both"
+    offset_provider: str = "cnaught"
     # Required bearer token for POST /carbon/offset. If empty, endpoint is disabled.
     offset_api_key: str = ""
 
-    # Patch API
-    patch_api_key: str = ""
-    patch_project_id: str = ""  # optional, auto-select if empty
+    # CNaught API (https://cnaught.com)
+    cnaught_api_key: str = ""
+    cnaught_base_url: str = "https://api.cnaught.com/v1"
+    cnaught_portfolio_id: str = ""  # optional, uses default portfolio if empty
 
-    # Tree-Nation API
+    # Tree-Nation API (https://tree-nation.com)
     tree_nation_api_key: str = ""
     tree_nation_planter_id: int = 0
     tree_nation_species_id: int = 0  # optional, cheapest if 0

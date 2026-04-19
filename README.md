@@ -157,7 +157,7 @@ Carbon Proxy can purchase carbon offsets to balance your LLM emissions. Two prov
 
 | Provider | What it does | Pricing |
 |---|---|---|
-| [Patch.io](https://patch.io) | Purchases verified carbon credits | Pay-per-gram, varies by project |
+| [CNaught](https://cnaught.com) | Purchases verified carbon credits (Oxford Principles portfolio) | $10-20/tonne, pay-as-you-go, 1 kg minimum |
 | [Tree-Nation](https://tree-nation.com) | Plants real trees | Pre-funded credits on your account |
 
 ### Setup
@@ -167,12 +167,12 @@ Carbon Proxy can purchase carbon offsets to balance your LLM emissions. Two prov
 3. Configure the provider:
 
 ```env
-OFFSET_PROVIDER=patch          # "patch", "tree-nation", or "both"
+OFFSET_PROVIDER=cnaught        # "cnaught", "tree-nation", or "both"
 OFFSET_API_KEY=your-secret     # Required to enable POST /carbon/offset
 
-# Patch.io
-PATCH_API_KEY=your-patch-key
-PATCH_PROJECT_ID=              # Optional, auto-selects if empty
+# CNaught (sign up at app.cnaught.com)
+CNAUGHT_API_KEY=your-key
+CNAUGHT_PORTFOLIO_ID=          # Optional, uses default portfolio if empty
 
 # Tree-Nation
 TREE_NATION_API_KEY=your-key

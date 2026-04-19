@@ -75,6 +75,9 @@ CAR_CO2_G_PER_KM = 120.0        # average car
 SMARTPHONE_CO2_G = 8.0           # per charge cycle
 STREAMING_CO2_G_PER_HOUR = 36.0  # video streaming
 GOOGLE_SEARCH_CO2_G = 0.2       # per search (EPA/Google)
+CAR_CO2_KG_PER_YEAR = 4600.0    # EPA avg passenger vehicle per year
+HOME_CO2_KG_PER_YEAR = 7440.0   # EPA avg US home energy per year
+FLIGHT_LA_NYC_CO2_KG = 403.0    # one-way per passenger (EPA)
 
 
 def equivalents(co2_grams: float) -> dict:
@@ -87,4 +90,7 @@ def equivalents(co2_grams: float) -> dict:
         "smartphone_charges": round(co2_grams / SMARTPHONE_CO2_G, 2),
         "streaming_hours": round(co2_grams / STREAMING_CO2_G_PER_HOUR, 2),
         "google_searches": round(co2_grams / GOOGLE_SEARCH_CO2_G, 1),
+        "cars_per_year": round(co2_kg / CAR_CO2_KG_PER_YEAR, 2),
+        "homes_energy_per_year": round(co2_kg / HOME_CO2_KG_PER_YEAR, 2),
+        "flights_la_nyc": round(co2_kg / FLIGHT_LA_NYC_CO2_KG, 2),
     }

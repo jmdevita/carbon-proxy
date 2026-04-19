@@ -1,0 +1,96 @@
+<div class="layout layout--col layout--stretch-x layout--stretch-y">
+  <div class="flex flex--col flex--between flex--top stretch-y stretch-x">
+
+    <!-- Top section -->
+    <div class="flex flex--col gap--medium stretch-x">
+
+      <!-- Status line -->
+      <div class="flex flex--center-x">
+        {% if is_surplus %}
+        <span class="label label--xlarge label--filled">Carbon Negative</span>
+        {% elsif is_net_zero %}
+        <span class="label label--xlarge label--filled">Net Zero</span>
+        {% else %}
+        <span class="label label--xlarge label--outline">Carbon Deficit</span>
+        {% endif %}
+      </div>
+
+      <!-- Top metrics row -->
+      <div class="flex flex--bottom gap--medium">
+        <div class="grow text--center">
+          <span class="value">{{ co2_grams }}g</span>
+          <span class="label label--small label--underline">CO2 Emitted</span>
+        </div>
+        {% if dynamic_carbon_intensity %}
+        <div class="grow text--center">
+          <span class="value value--small">{{ energy_kwh }}</span>
+          <span class="label label--small label--underline">kWh Energy</span>
+        </div>
+        {% endif %}
+        <div class="grow text--center">
+          <span class="value value--small">{{ total_requests }}</span>
+          <span class="label label--small label--underline">Requests</span>
+        </div>
+        <div class="grow text--center">
+          <span class="value value--small">{{ total_tokens }}</span>
+          <span class="label label--small label--underline">Tokens</span>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Carbon debt section -->
+      <div class="stretch-x">
+        <div class="flex flex--between flex--bottom stretch-x">
+          <span class="label label--small">Carbon Debt</span>
+          <span class="value value--small">{{ neutralized_pct }}%</span>
+        </div>
+        <div class="progress-bar stretch-x">
+          <div class="track">
+            {% if is_surplus %}
+            <div class="fill" style="width:100%;"></div>
+            {% elsif is_net_zero %}
+            <div class="fill" style="width:100%;"></div>
+            {% else %}
+            <div class="fill" style="width:{{ neutralized_pct }}%;"></div>
+            {% endif %}
+          </div>
+        </div>
+        <div class="flex flex--between stretch-x">
+          {% if is_surplus %}
+          <span class="description">Carbon negative (+{{ surplus }}g surplus)</span>
+          {% elsif is_net_zero %}
+          <span class="description">Net zero</span>
+          {% else %}
+          <span class="description">{{ neutralized_grams }}g neutralized of {{ co2_grams }}g emitted</span>
+          <span class="description">{{ debt_grams }}g remaining debt</span>
+          {% endif %}
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Bottom section -->
+    <div class="flex flex--col gap--small stretch-x">
+      <div class="grid grid--cols-3 gap--medium stretch-x">
+        <div class="col col--center bg--gray-75 rounded--small p--small">
+          <span class="value value--small">{{ eq1_value }}</span>
+          <span class="label label--small">{{ eq1_label }}</span>
+        </div>
+        <div class="col col--center bg--gray-75 rounded--small p--small">
+          <span class="value value--small">{{ eq2_value }}</span>
+          <span class="label label--small">{{ eq2_label }}</span>
+        </div>
+        <div class="col col--center bg--gray-75 rounded--small p--small">
+          <span class="value value--small">{{ eq3_value }}</span>
+          <span class="label label--small">{{ eq3_label }}</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+<div class="title_bar">
+  <span class="title">Carbon Proxy</span>
+  <span class="instance">{{ updated_at | date: "%b %d, %H:%M" }}</span>
+</div>

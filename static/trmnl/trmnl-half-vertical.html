@@ -1,67 +1,73 @@
-<style>
-  .cp-val { font-size: 20px; font-weight: 700; }
-  .cp-val-lg { font-size: 28px; font-weight: 700; }
-  .cp { display: flex; flex-direction: column; justify-content: space-between; min-height: 430px; padding: 10px 16px; }
-  .cp-metric { flex: 1; text-align: center; }
-  .cp-lbl { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.5; display: block; margin-top: 2px; border-bottom: 1px dotted #000; padding-bottom: 2px; }
-  .cp-bar-bg { height: 18px; overflow: hidden; position: relative; border: 2px solid #000; border-radius: 4px; margin: 3px 0; }
-  .cp-bar-fill { height: 100%; background: #000; border-radius: 2px; }
-  .cp-bar-text { position: absolute; top: 50%; transform: translateY(-50%); left: 8px; font-size: 9px; font-weight: 600; color: #fff; }
-</style>
+<div class="layout layout--col layout--stretch-x layout--stretch-y">
+  <div class="flex flex--col flex--evenly stretch-y stretch-x">
 
-<div class="view">
-  <div class="title_bar">
-    <span class="title">Carbon Proxy</span>
-    <span class="instance">{{ updated_at | date: "%b %d, %H:%M" }}</span>
-  </div>
+    <!-- Status -->
+    <div class="flex flex--center-x">
+      {% if is_surplus %}
+      <span class="label label--large label--filled">Carbon Negative</span>
+      {% elsif is_net_zero %}
+      <span class="label label--large label--filled">Net Zero</span>
+      {% else %}
+      <span class="label label--large label--outline">Carbon Deficit</span>
+      {% endif %}
+    </div>
 
-  <div class="cp">
-
-    <div class="flex flex--bottom">
-      <div class="cp-metric">
-        <span class="cp-val-lg">{{ co2_grams }}g</span>
-        <span class="cp-lbl">CO2 Emitted</span>
+    <!-- Metrics -->
+    <div class="flex flex--bottom gap--small">
+      <div class="grow text--center">
+        <span class="value value--small">{{ co2_grams }}g</span>
+        <span class="label label--small label--underline">CO2 Emitted</span>
       </div>
-      <div class="cp-metric">
-        <span class="cp-val">{{ total_requests }}</span>
-        <span class="cp-lbl">Requests</span>
+      <div class="grow text--center">
+        <span class="value value--xsmall">{{ total_requests }}</span>
+        <span class="label label--small label--underline">Requests</span>
       </div>
-      <div class="cp-metric">
-        <span class="cp-val">{{ total_tokens }}</span>
-        <span class="cp-lbl">Tokens</span>
+      <div class="grow text--center">
+        <span class="value value--xsmall">{{ total_tokens }}</span>
+        <span class="label label--small label--underline">Tokens</span>
       </div>
     </div>
 
+    <div class="divider"></div>
+
+    <!-- Carbon debt -->
     <div class="stretch-x">
       <div class="flex flex--between flex--bottom stretch-x">
-        <span class="cp-lbl" style="border:none;">Carbon Debt</span>
-        <span class="cp-val">{{ neutralized_pct }}%</span>
+        <span class="label label--small">Carbon Debt</span>
+        <span class="value value--xxsmall">{{ neutralized_pct }}%</span>
       </div>
-      <div class="cp-bar-bg stretch-x">
-        {% if is_surplus %}
-        <div class="cp-bar-fill" style="width:100%;"><span class="cp-bar-text">Carbon negative</span></div>
-        {% elsif is_net_zero %}
-        <div class="cp-bar-fill" style="width:100%;"><span class="cp-bar-text">Net zero</span></div>
-        {% else %}
-        <div class="cp-bar-fill" style="width:{{ neutralized_pct }}%;"><span class="cp-bar-text">{{ neutralized_grams }}g neutralized</span></div>
-        {% endif %}
+      <div class="progress-bar progress-bar--small stretch-x">
+        <div class="track">
+          {% if is_surplus %}
+          <div class="fill" style="width:100%;"></div>
+          {% elsif is_net_zero %}
+          <div class="fill" style="width:100%;"></div>
+          {% else %}
+          <div class="fill" style="width:{{ neutralized_pct }}%;"></div>
+          {% endif %}
+        </div>
       </div>
     </div>
 
-    <div class="flex flex--bottom">
-      <div class="cp-metric">
-        <span class="cp-val">{{ trees_planted }}</span>
-        <span class="cp-lbl">Trees</span>
+    <!-- Bottom section -->
+    <div class="grid grid--cols-3 gap--small stretch-x">
+      <div class="col col--center bg--gray-75 rounded--small p--small">
+        <span class="value value--xxsmall">{{ eq1_value }}</span>
+        <span class="label label--small">{{ eq1_label }}</span>
       </div>
-      <div class="cp-metric">
-        <span class="cp-val">{{ total_cost }}</span>
-        <span class="cp-lbl">Spent</span>
+      <div class="col col--center bg--gray-75 rounded--small p--small">
+        <span class="value value--xxsmall">{{ eq2_value }}</span>
+        <span class="label label--small">{{ eq2_label }}</span>
       </div>
-      <div class="cp-metric">
-        <span class="cp-val">{{ phone_charges }}</span>
-        <span class="cp-lbl">Charges</span>
+      <div class="col col--center bg--gray-75 rounded--small p--small">
+        <span class="value value--xxsmall">{{ eq3_value }}</span>
+        <span class="label label--small">{{ eq3_label }}</span>
       </div>
     </div>
 
   </div>
+</div>
+<div class="title_bar">
+  <span class="title">Carbon Proxy</span>
+  <span class="instance">{{ updated_at | date: "%b %d, %H:%M" }}</span>
 </div>
