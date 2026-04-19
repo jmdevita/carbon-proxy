@@ -120,24 +120,30 @@ async def _fetch_cnaught_rate() -> int:
     if _cached_rate_cents is not None and (now - _cache_time) < _QUOTE_CACHE_TTL:
         return _cached_rate_cents
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{settings.cnaught_base_url}/quotes",
-            json={"amount_kg": 1},
-            headers={
-                "Authorization": f"Bearer {settings.cnaught_api_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{settings.cnaught_base_url}/quotes",
+                json={"amount_kg": 1},
+                headers={
+                    "Authorization": f"Bearer {settings.cnaught_api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
 
-    rate = data.get("price_usd_cents", 0)
-    _cached_rate_cents = rate
-    _cache_time = now
-    logger.info("Updated CNaught rate: %d cents/kg (cached 30m)", rate)
-    return rate
+        rate = data.get("price_usd_cents", 0)
+        _cached_rate_cents = rate
+        _cache_time = now
+        logger.info("Updated CNaught rate: %d cents/kg (cached 30m)", rate)
+        return rate
+    except Exception as e:
+        if _cached_rate_cents is not None:
+            logger.warning("CNaught rate fetch failed (%s), using stale cached rate", e)
+            return _cached_rate_cents
+        raise
 
 
 async def quote_cnaught(co2_grams: float) -> QuoteResult:
