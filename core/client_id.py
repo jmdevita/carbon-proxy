@@ -16,11 +16,7 @@ def identify(request: Request, body: dict | None = None) -> str:
     if carbon_source:
         return carbon_source[:50]
 
-    # 3. user field in request body
-    if body and body.get("user"):
-        return str(body["user"])
-
-    # 4. User-Agent
+    # 3. User-Agent
     ua = request.headers.get("user-agent", "")
     if ua:
         # Truncate to something readable

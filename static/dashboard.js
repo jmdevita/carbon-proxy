@@ -249,14 +249,17 @@ async function refreshAll() {
   const kwh = summary.total_energy_kwh || 0;
   const co2 = summary.total_co2_grams || 0;
   const totalReqs = summary.total_requests || 0;
+  const totalTokens = summary.total_tokens || 0;
   if (showEnergy) {
     document.getElementById('gEnergy').textContent = fmtShort(kwh);
     setGauge('gaugeEnergy', logPct(kwh, 10));
   }
   document.getElementById('gEmissions').textContent = fmtShort(co2);
   document.getElementById('gRequests').textContent = totalReqs;
+  document.getElementById('gTokens').textContent = fmtShort(totalTokens);
   setGauge('gaugeEmissions', logPct(co2, 1000));
   setGauge('gaugeRequests', logPct(totalReqs, 1000));
+  setGauge('gaugeTokens', logPct(totalTokens, 1000000));
 
   // Equivalents (rotates between two sets, context-aware: red vs green)
   const isGreen = (balance.balance_grams || 0) <= 0 && (balance.total_offset_grams || 0) > 0;
