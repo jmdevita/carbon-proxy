@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     trmnl_plugin_uuid: str = ""
     trmnl_push_interval: int = 300  # seconds
 
+    # Auto-offset (opt-in, runtime-toggleable via dashboard; these are defaults/limits)
+    auto_offset_default_enabled: bool = False
+    auto_offset_daily_cap_cents: int = 100  # $1.00/day
+    auto_offset_check_interval_s: int = 86400  # once per day
+    auto_offset_min_purchase_grams: int = 1000  # don't buy less than 1 kg at a time
+
     @field_validator("power_sample_hz")
     @classmethod
     def validate_sample_hz(cls, v):

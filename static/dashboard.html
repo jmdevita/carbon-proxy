@@ -12,6 +12,11 @@
 <body>
 <div class="container">
 
+<div id="autoOffsetBanner" class="alert-banner" style="display:none">
+  <span id="autoOffsetBannerText"></span>
+  <button class="btn btn-primary" onclick="openOffsetModal()">Offset Now</button>
+</div>
+
 <header>
   <div class="logo">
     <div>carbon<span>proxy</span></div>
@@ -144,11 +149,31 @@
 <div class="section">
   <div class="section-header" onclick="toggleSection('dailySection')">
     <div class="section-title">Daily Breakdown</div>
-    <div class="section-toggle" id="dailySection-arrow">&#9660;</div>
+    <div class="section-actions">
+      <select class="filter-select" id="heatmapMetric" onclick="event.stopPropagation()" onchange="event.stopPropagation();updateDailyView()">
+        <option value="co2">CO2</option>
+        <option value="tokens">Tokens</option>
+        <option value="requests">Requests</option>
+      </select>
+      <button class="btn" id="dailyViewToggle" onclick="event.stopPropagation();toggleDailyView()">Heatmap</button>
+      <div class="section-toggle" id="dailySection-arrow">&#9660;</div>
+    </div>
   </div>
   <div class="section-content" id="dailySection">
-    <div class="chart-card">
+    <div class="chart-card" id="dailyChartCard">
       <canvas id="dailyChart" height="200"></canvas>
+    </div>
+    <div class="chart-card" id="heatmapCard" style="display:none">
+      <div class="heatmap-wrap"><div id="heatmap"></div></div>
+      <div class="heatmap-legend">
+        <span>Less</span>
+        <span class="heatmap-cell heatmap-l0"></span>
+        <span class="heatmap-cell heatmap-l1"></span>
+        <span class="heatmap-cell heatmap-l2"></span>
+        <span class="heatmap-cell heatmap-l3"></span>
+        <span class="heatmap-cell heatmap-l4"></span>
+        <span>More</span>
+      </div>
     </div>
     <div class="table-card"><div class="table-scroll">
       <table>
@@ -209,6 +234,20 @@
       <button class="btn" onclick="closeOffsetModal()">Cancel</button>
       <button class="btn" id="quoteBtn" onclick="fetchQuote()">Get Quote</button>
       <button class="btn btn-primary" id="confirmOffsetBtn" onclick="confirmOffset()" style="display:none">Purchase</button>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--border);margin:20px 0">
+    <div class="auto-offset-card">
+      <div class="auto-offset-row">
+        <label class="auto-offset-toggle">
+          <input type="checkbox" id="autoOffsetEnabled" onchange="toggleAutoOffset()">
+          <span>Enable auto-offset</span>
+        </label>
+        <span class="auto-offset-meta" id="autoOffsetMeta">--</span>
+      </div>
+      <p class="auto-offset-help">
+        When enabled, the server checks once per day and purchases offsets up to the daily cap.
+        Above the cap, purchases stop and a banner appears so you can offset manually.
+      </p>
     </div>
   </div>
 </div>

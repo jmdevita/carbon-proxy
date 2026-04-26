@@ -60,10 +60,19 @@ def init_db():
             tree_count INTEGER NOT NULL DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS kv_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_requests_source ON requests(source);
         CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp);
         CREATE INDEX IF NOT EXISTS idx_requests_model ON requests(model);
     """)
+    # Idempotent migration: add is_auto column to offsets if missing
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(offsets)").fetchall()]
+    if "is_auto" not in cols:
+        conn.execute("ALTER TABLE offsets ADD COLUMN is_auto INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     logger.info("Database initialized at %s", settings.sqlite_path)
 
@@ -232,6 +241,7 @@ def log_offset(
     certificate_url: str = "",
     order_id: str = "",
     tree_count: int = 0,
+    is_auto: bool = False,
 ):
     with _db_lock:
         conn = _get_conn()
@@ -239,10 +249,10 @@ def log_offset(
         conn.execute(
             """INSERT INTO offsets
                (timestamp, provider, co2_grams_offset, cost_cents, currency,
-                certificate_url, order_id, tree_count)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                certificate_url, order_id, tree_count, is_auto)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (now, provider, co2_grams_offset, cost_cents, currency,
-             certificate_url, order_id, tree_count),
+             certificate_url, order_id, tree_count, 1 if is_auto else 0),
         )
         conn.commit()
 
@@ -295,6 +305,34 @@ def get_sources() -> list[str]:
             "SELECT DISTINCT source FROM requests ORDER BY source"
         ).fetchall()
         return [row["source"] for row in rows]
+
+
+def get_kv(key: str, default: str | None = None) -> str | None:
+    with _db_lock:
+        conn = _get_conn()
+        row = conn.execute("SELECT value FROM kv_settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+
+def set_kv(key: str, value: str):
+    with _db_lock:
+        conn = _get_conn()
+        conn.execute(
+            "INSERT INTO kv_settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        conn.commit()
+
+
+def get_today_auto_spend_cents() -> int:
+    with _db_lock:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT COALESCE(SUM(cost_cents), 0) AS total FROM offsets "
+            "WHERE is_auto = 1 AND DATE(timestamp) = DATE('now')"
+        ).fetchone()
+        return int(row["total"])
 
 
 def close_db():

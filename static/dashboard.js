@@ -182,7 +182,38 @@ function updatePowerChart(live) {
   powerChart.update('none');
 }
 
-function updateDailyChart(dailyData) {
+// -- Daily breakdown: bar chart + heatmap --
+let _latestDaily = [];
+
+function getDailyView() { return localStorage.getItem('dailyView') === 'heatmap' ? 'heatmap' : 'chart'; }
+function getHeatmapMetric() { return localStorage.getItem('heatmapMetric') || 'co2'; }
+
+function applyDailyViewUI() {
+  const view = getDailyView();
+  document.getElementById('dailyChartCard').style.display = view === 'chart' ? '' : 'none';
+  document.getElementById('heatmapCard').style.display = view === 'heatmap' ? '' : 'none';
+  document.getElementById('dailyViewToggle').textContent = view === 'chart' ? 'Heatmap' : 'Bar chart';
+  document.getElementById('heatmapMetric').style.display = view === 'heatmap' ? '' : 'none';
+  document.getElementById('heatmapMetric').value = getHeatmapMetric();
+}
+
+function toggleDailyView() {
+  localStorage.setItem('dailyView', getDailyView() === 'chart' ? 'heatmap' : 'chart');
+  applyDailyViewUI();
+  renderDaily();
+}
+
+function updateDailyView() {
+  localStorage.setItem('heatmapMetric', document.getElementById('heatmapMetric').value);
+  renderDaily();
+}
+
+function renderDaily() {
+  if (getDailyView() === 'heatmap') renderHeatmap(_latestDaily, getHeatmapMetric());
+  else renderDailyBarChart(_latestDaily);
+}
+
+function renderDailyBarChart(dailyData) {
   // Group by date, split by source
   const dateMap = {};
   const sourceSet = new Set();
@@ -209,6 +240,191 @@ function updateDailyChart(dailyData) {
   }));
 
   dailyChart.update('none');
+}
+
+// Aggregate daily data by date for the heatmap (collapses sources)
+function aggregateByDate(dailyData, metric) {
+  const m = {};
+  dailyData.forEach(row => {
+    const date = row.date;
+    if (!date) return;
+    let v = 0;
+    if (metric === 'co2') v = (row.co2_kg || 0) * 1000;       // grams
+    else if (metric === 'tokens') v = row.total_tokens || 0;
+    else v = row.requests || 0;
+    m[date] = (m[date] || 0) + v;
+  });
+  return m;
+}
+
+function fmtMetric(v, metric) {
+  if (metric === 'co2') return fmt(v, 2) + ' g';
+  if (metric === 'tokens') return v.toLocaleString();
+  return String(v);
+}
+
+function metricLabel(metric) {
+  return metric === 'co2' ? 'CO2' : metric === 'tokens' ? 'tokens' : 'requests';
+}
+
+const HEATMAP_WEEKS = 53;
+const HEATMAP_DAYS = 7;
+const CELL = 11;
+const CELL_GAP = 3;
+
+function renderHeatmap(dailyData, metric) {
+  const container = document.getElementById('heatmap');
+  if (!container) return;
+  const byDate = aggregateByDate(dailyData, metric);
+
+  // Build the past HEATMAP_WEEKS*7 days, ending with today, aligned so each column is a week (Sun-Sat).
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const end = new Date(today);
+  // Find the most recent Saturday (or today if Saturday) so the rightmost column is the current week
+  end.setDate(end.getDate() + (6 - end.getDay()));
+  const start = new Date(end);
+  start.setDate(start.getDate() - (HEATMAP_WEEKS * HEATMAP_DAYS - 1));
+
+  // Compute max for color scale
+  let max = 0;
+  for (let i = 0; i < HEATMAP_WEEKS * HEATMAP_DAYS; i++) {
+    const d = new Date(start);
+    d.setDate(d.getDate() + i);
+    if (d > today) continue;
+    const k = d.toISOString().slice(0, 10);
+    if (byDate[k] > max) max = byDate[k];
+  }
+
+  // Color bucket: 0-4 based on log scale (so small values still show)
+  const bucket = (v) => {
+    if (v <= 0) return 0;
+    if (max <= 0) return 0;
+    const r = Math.log(1 + v) / Math.log(1 + max);
+    if (r < 0.25) return 1;
+    if (r < 0.5) return 2;
+    if (r < 0.75) return 3;
+    return 4;
+  };
+
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const dayLabels = ['', 'Mon', '', 'Wed', '', 'Fri', ''];
+
+  const labelW = 28;
+  const monthH = 14;
+  const innerW = HEATMAP_WEEKS * (CELL + CELL_GAP);
+  const innerH = HEATMAP_DAYS * (CELL + CELL_GAP);
+  const w = labelW + innerW;
+  const h = monthH + innerH;
+
+  let svg = `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">`;
+
+  // Day-of-week labels
+  for (let r = 0; r < HEATMAP_DAYS; r++) {
+    if (!dayLabels[r]) continue;
+    const y = monthH + r * (CELL + CELL_GAP) + CELL - 2;
+    svg += `<text x="0" y="${y}" class="heatmap-axis">${dayLabels[r]}</text>`;
+  }
+
+  // Cells + month labels (label appears at first column of each new month,
+  // skipped when too close to the previous label to avoid overlap).
+  const MIN_LABEL_SPACING_PX = 30;
+  let lastMonth = -1;
+  let lastLabelX = -Infinity;
+  for (let col = 0; col < HEATMAP_WEEKS; col++) {
+    for (let row = 0; row < HEATMAP_DAYS; row++) {
+      const d = new Date(start);
+      d.setDate(d.getDate() + col * HEATMAP_DAYS + row);
+      const future = d > today;
+      const k = d.toISOString().slice(0, 10);
+      const v = byDate[k] || 0;
+      const cls = future ? 'heatmap-cell heatmap-future' : `heatmap-cell heatmap-l${bucket(v)}`;
+      const x = labelW + col * (CELL + CELL_GAP);
+      const y = monthH + row * (CELL + CELL_GAP);
+      const tip = future ? '' : `${k}: ${fmtMetric(v, metric)}`;
+      svg += `<rect x="${x}" y="${y}" width="${CELL}" height="${CELL}" rx="2" class="${cls}">`;
+      if (tip) svg += `<title>${tip}</title>`;
+      svg += `</rect>`;
+
+      // Month label only on the first row of the column when the month changes
+      if (row === 0) {
+        const m = d.getMonth();
+        if (m !== lastMonth) {
+          if (x - lastLabelX >= MIN_LABEL_SPACING_PX) {
+            svg += `<text x="${x}" y="${monthH - 4}" class="heatmap-axis">${months[m]}</text>`;
+            lastLabelX = x;
+          }
+          lastMonth = m;
+        }
+      }
+    }
+  }
+
+  svg += '</svg>';
+  container.innerHTML = svg;
+}
+
+function updateDailyChart(dailyData) {
+  _latestDaily = dailyData || [];
+  renderDaily();
+}
+
+// -- Auto-offset --
+async function refreshAutoOffsetStatus() {
+  let s;
+  try {
+    const r = await fetch('/carbon/auto_offset');
+    s = await r.json();
+  } catch (e) {
+    return;
+  }
+  // Banner
+  const banner = document.getElementById('autoOffsetBanner');
+  const text = document.getElementById('autoOffsetBannerText');
+  if (s.cap_exceeded) {
+    const pendingG = (s.pending_grams || 0).toFixed(1);
+    const cap = (s.daily_cap_cents / 100).toFixed(2);
+    text.textContent = `Auto-offset hit $${cap} daily cap — ${pendingG} g of debt awaiting manual offset.`;
+    banner.style.display = '';
+  } else {
+    banner.style.display = 'none';
+  }
+  // Settings card (only visible when modal is open, but safe to update either way)
+  const cb = document.getElementById('autoOffsetEnabled');
+  if (cb) cb.checked = !!s.enabled;
+  const meta = document.getElementById('autoOffsetMeta');
+  if (meta) {
+    const spent = (s.today_spent_cents / 100).toFixed(2);
+    const cap = (s.daily_cap_cents / 100).toFixed(2);
+    meta.textContent = `Today: $${spent} / $${cap}`;
+  }
+}
+
+async function toggleAutoOffset() {
+  const cb = document.getElementById('autoOffsetEnabled');
+  const desired = cb.checked;
+  const key = getOffsetKey();
+  if (!key) { cb.checked = !desired; return; }
+  try {
+    const r = await fetch('/carbon/auto_offset/toggle', {
+      method: 'POST',
+      headers: {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: desired}),
+    });
+    if (!r.ok) {
+      if (r.status === 401) localStorage.removeItem('offset_api_key');
+      cb.checked = !desired;
+      const status = document.getElementById('offsetStatus');
+      if (status) {
+        status.textContent = 'Auto-offset toggle failed (auth?)';
+        status.style.color = 'var(--red)';
+      }
+      return;
+    }
+    refreshAutoOffsetStatus();
+  } catch (e) {
+    cb.checked = !desired;
+  }
 }
 
 // Equivalents carousel state
@@ -344,6 +560,9 @@ async function refreshAll() {
 
   // Daily chart
   updateDailyChart(daily);
+
+  // Auto-offset banner + settings card
+  refreshAutoOffsetStatus();
 
   // Daily table
   const dTb = document.getElementById('dailyTb');
@@ -495,6 +714,7 @@ async function confirmOffset() {
 }
 
 // -- Init --
+applyDailyViewUI();
 loadSources();
 refreshAll();
 setInterval(refreshAll, 3000);       // Data + power chart every 3s

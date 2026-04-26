@@ -1,12 +1,13 @@
 import asyncio
 
-from fastapi import APIRouter, Query, HTTPException, Request
+from fastapi import APIRouter, Body, Query, HTTPException, Request
 
 import db
 from energy.carbon import equivalents
 from config import settings
 from energy.power import monitor as power_monitor
-from api.offsets import purchase_offset, get_quote
+from api.offsets import purchase_offset, get_quote, get_auto_offset_status
+from api import auto_offset
 
 router = APIRouter(prefix="/carbon", tags=["carbon"])
 
@@ -178,3 +179,29 @@ async def manual_offset(
             for r in results
         ],
     }
+
+
+@router.get("/auto_offset")
+async def auto_offset_get():
+    """Current auto-offset status (read-only, no auth)."""
+    return await get_auto_offset_status()
+
+
+@router.post("/auto_offset/toggle")
+async def auto_offset_toggle(
+    request: Request,
+    enabled: bool = Body(..., embed=True),
+):
+    """Enable/disable auto-offset. Same Bearer auth as /carbon/offset."""
+    if not settings.offset_api_key:
+        raise HTTPException(403, "Auto-offset toggle disabled -- set OFFSET_API_KEY to enable")
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer ") or auth[7:].strip() != settings.offset_api_key:
+        raise HTTPException(401, "Invalid or missing offset API key")
+
+    await asyncio.to_thread(db.set_kv, "auto_offset_enabled", "true" if enabled else "false")
+    if enabled:
+        # Fire an immediate tick so the user doesn't wait until the next daily check.
+        # Lock-protected and exception-safe to avoid races with the background loop.
+        asyncio.create_task(auto_offset.fire_and_forget())
+    return await get_auto_offset_status()

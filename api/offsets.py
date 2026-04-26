@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import math
 import time
@@ -188,7 +189,7 @@ async def get_quote(co2_grams: float) -> list[QuoteResult]:
     return quotes
 
 
-async def _log_and_append(result: OffsetResult, results: list[OffsetResult]):
+async def _log_and_append(result: OffsetResult, results: list[OffsetResult], is_auto: bool = False):
     await db.log_offset_async(
         provider=result.provider,
         co2_grams_offset=result.co2_grams_offset,
@@ -197,22 +198,24 @@ async def _log_and_append(result: OffsetResult, results: list[OffsetResult]):
         certificate_url=result.certificate_url,
         order_id=result.order_id,
         tree_count=result.tree_count,
+        is_auto=is_auto,
     )
     results.append(result)
 
 
-async def purchase_offset(co2_grams: float) -> list[OffsetResult]:
+async def purchase_offset(co2_grams: float, is_auto: bool = False) -> list[OffsetResult]:
     """Purchase offset from configured provider(s). Returns list of results."""
     results = []
     provider = settings.offset_provider
+    tag = " (auto)" if is_auto else ""
 
     if provider in ("cnaught", "both"):
         try:
             result = await purchase_cnaught(co2_grams)
-            await _log_and_append(result, results)
+            await _log_and_append(result, results, is_auto=is_auto)
             logger.info(
-                "CNaught offset purchased: %d kg CO2, $%.2f, order=%s",
-                math.ceil(co2_grams / 1000), result.cost_cents / 100, result.order_id,
+                "CNaught offset purchased%s: %d kg CO2, $%.2f, order=%s",
+                tag, math.ceil(co2_grams / 1000), result.cost_cents / 100, result.order_id,
             )
         except Exception as e:
             logger.error("CNaught offset failed: %s", e)
@@ -220,12 +223,39 @@ async def purchase_offset(co2_grams: float) -> list[OffsetResult]:
     if provider in ("tree-nation", "both"):
         try:
             result = await purchase_tree_nation(co2_grams)
-            await _log_and_append(result, results)
+            await _log_and_append(result, results, is_auto=is_auto)
             logger.info(
-                "Tree-Nation offset purchased: %d trees, order=%s",
-                result.tree_count, result.order_id,
+                "Tree-Nation offset purchased%s: %d trees, order=%s",
+                tag, result.tree_count, result.order_id,
             )
         except Exception as e:
             logger.error("Tree-Nation offset failed: %s", e)
 
     return results
+
+
+def is_auto_offset_enabled() -> bool:
+    val = db.get_kv("auto_offset_enabled")
+    if val is None:
+        return settings.auto_offset_default_enabled
+    return val == "true"
+
+
+async def get_auto_offset_status() -> dict:
+    """Return current auto-offset status for the dashboard banner + settings UI."""
+    enabled = await asyncio.to_thread(is_auto_offset_enabled)
+    today_spent = await asyncio.to_thread(db.get_today_auto_spend_cents)
+    balance = await asyncio.to_thread(db.get_balance)
+    cap = settings.auto_offset_daily_cap_cents
+    pending_grams = max(0.0, balance.get("balance_grams", 0))
+    cap_exceeded = enabled and today_spent >= cap and pending_grams > 0
+
+    return {
+        "enabled": enabled,
+        "daily_cap_cents": cap,
+        "today_spent_cents": today_spent,
+        "cap_exceeded": cap_exceeded,
+        "pending_grams": round(pending_grams, 4),
+        "min_purchase_grams": settings.auto_offset_min_purchase_grams,
+        "check_interval_s": settings.auto_offset_check_interval_s,
+    }

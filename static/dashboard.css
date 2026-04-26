@@ -403,6 +403,56 @@ header {
 
 .section-actions { display: flex; align-items: center; gap: 8px; }
 
+/* Alert banner (auto-offset cap exceeded, etc.) */
+.alert-banner {
+  background: var(--red-dim);
+  border-left: 3px solid var(--red);
+  color: var(--text);
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.85rem;
+}
+
+/* Auto-offset settings card (inside offset modal) */
+.auto-offset-card { font-size: 0.82rem; }
+.auto-offset-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+.auto-offset-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.auto-offset-toggle input { cursor: pointer; }
+.auto-offset-meta { color: var(--muted); font-variant-numeric: tabular-nums; }
+.auto-offset-help { color: var(--muted); font-size: 0.75rem; line-height: 1.4; margin: 0; }
+
+/* Calendar heatmap */
+.heatmap-wrap { overflow-x: auto; padding-bottom: 4px; }
+#heatmap svg { display: block; }
+.heatmap-cell {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+.heatmap-l0 { fill: var(--border); background: var(--border); }
+.heatmap-l1 { fill: rgba(191,251,79,0.25); background: rgba(191,251,79,0.25); }
+.heatmap-l2 { fill: rgba(191,251,79,0.5); background: rgba(191,251,79,0.5); }
+.heatmap-l3 { fill: rgba(191,251,79,0.75); background: rgba(191,251,79,0.75); }
+.heatmap-l4 { fill: var(--primary); background: var(--primary); }
+.heatmap-future { fill: transparent; }
+.heatmap-axis { fill: var(--muted); font-size: 9px; font-family: inherit; }
+.heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 0.7rem;
+  color: var(--muted);
+  justify-content: flex-end;
+}
+
 /* Live indicator */
 .live-strip {
   display: flex;

@@ -18,7 +18,7 @@ from config import settings
 from core.proxy import router as proxy_router, init_client, close_client
 from api.reporting import router as reporting_router
 import db
-from api import trmnl
+from api import trmnl, auto_offset
 from energy.power import monitor as power_monitor
 
 
@@ -34,10 +34,13 @@ async def lifespan(app: FastAPI):
         trmnl_task = asyncio.create_task(trmnl.push_loop())
         logger.info("TRMNL push enabled (every %ds)", settings.trmnl_push_interval)
 
+    auto_offset_task = asyncio.create_task(auto_offset.push_loop())
+
     yield
 
     if trmnl_task:
         trmnl_task.cancel()
+    auto_offset_task.cancel()
     power_monitor.stop()
     await close_client()
     db.close_db()
