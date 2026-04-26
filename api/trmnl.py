@@ -26,6 +26,21 @@ _EQ_SETS = [
         {"label": "Charges Offset" if green else "Phone Charges", "value": eq.get("smartphone_charges", 0)},
         {"label": "Searches Offset" if green else "Google Searches", "value": eq.get("google_searches", 0)},
     ],
+    lambda eq, green: [
+        {"label": "Km Not Driven" if green else "Km Driven", "value": eq.get("km_driven", 0)},
+        {"label": "Streaming Offset" if green else "Streaming Hrs", "value": eq.get("streaming_hours", 0)},
+        {"label": "Emails Offset" if green else "Emails Sent", "value": eq.get("emails_sent", 0)},
+    ],
+    lambda eq, green: [
+        {"label": "Coffees Offset" if green else "Coffees", "value": eq.get("coffee_cups", 0)},
+        {"label": "Kettles Offset" if green else "Kettle Boils", "value": eq.get("kettle_boils", 0)},
+        {"label": "Burgers Offset" if green else "Beef Burgers", "value": eq.get("beef_burgers", 0)},
+    ],
+    lambda eq, green: [
+        {"label": "ChatGPT Offset" if green else "ChatGPT Queries", "value": eq.get("chatgpt_queries", 0)},
+        {"label": "Laundry Offset" if green else "Laundry Loads", "value": eq.get("laundry_loads", 0)},
+        {"label": "Searches Offset" if green else "Google Searches", "value": eq.get("google_searches", 0)},
+    ],
 ]
 
 
@@ -39,13 +54,13 @@ def _format_tokens(n: int) -> str:
 
 def _build_payload(summary: dict, balance: dict, power: dict) -> dict:
     global _eq_cycle
-    eq = equivalents(summary.get("total_co2_grams", 0))
-
     emitted = balance.get("total_co2_grams", 0)
     neutralized = balance.get("total_offset_grams", 0)
     debt = balance.get("balance_grams", 0)
     pct = min(round((neutralized / emitted) * 100) if emitted > 0 else 0, 999)
     is_green = debt < 0
+    # When carbon-negative, equivalents represent the surplus offset (not emissions)
+    eq = equivalents(abs(debt) if is_green else emitted)
 
     # Rotating equivalency set
     eq_set = _EQ_SETS[_eq_cycle % len(_EQ_SETS)](eq, is_green)

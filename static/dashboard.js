@@ -211,21 +211,43 @@ function updateDailyChart(dailyData) {
   dailyChart.update('none');
 }
 
-// Equivalents rotation state
-let _eqSetIndex = 0;
-let _latestEqSets = [];
-let _latestEqGreen = false;
-let _latestEqColor = 'var(--muted)';
+// Equivalents carousel state
+let _carouselItems = [];
+let _carouselGreen = false;
+let _carouselColor = 'var(--muted)';
 
-function renderEquivSet() {
-  if (!_latestEqSets.length) return;
-  const set = _latestEqSets[_eqSetIndex % _latestEqSets.length];
-  set.forEach((item, i) => {
-    document.getElementById('eq'+i+'Icon').innerHTML = '<span class="mdi '+item.icon+'"></span>';
-    document.getElementById('eq'+i+'Icon').style.color = _latestEqColor;
-    document.getElementById('eq'+i+'Val').textContent = fmtEq(item.val || 0);
-    document.getElementById('eq'+i+'Desc').textContent = _latestEqGreen ? item.green : item.red;
-  });
+// Build the carousel DOM once with empty placeholders. Subsequent refreshes only
+// update text/class on existing nodes, so scroll position and momentum aren't disturbed.
+function ensureCarouselDom() {
+  const track = document.getElementById('equivTrack');
+  const carousel = document.getElementById('equivCarousel');
+  if (!track || !carousel || !_carouselItems.length) return;
+  const needed = _carouselItems.length * 3;
+  if (track.children.length === needed) return;
+  const cell = `<div class="equiv">
+    <div class="equiv-icon"><span class="mdi"></span></div>
+    <div class="equiv-number"></div>
+    <div class="equiv-desc"></div>
+  </div>`;
+  track.innerHTML = cell.repeat(needed);
+  // Start centered in the middle copy so dragging either way has buffer
+  carousel.scrollLeft = track.scrollWidth / 3;
+}
+
+function renderCarousel() {
+  ensureCarouselDom();
+  const track = document.getElementById('equivTrack');
+  if (!track || !_carouselItems.length) return;
+  const n = _carouselItems.length;
+  for (let k = 0; k < track.children.length; k++) {
+    const item = _carouselItems[k % n];
+    const node = track.children[k];
+    const iconWrap = node.firstElementChild;
+    iconWrap.style.color = _carouselColor;
+    iconWrap.firstElementChild.className = 'mdi ' + item.icon;
+    node.children[1].textContent = fmtEq(item.val || 0);
+    node.children[2].textContent = _carouselGreen ? item.green : item.red;
+  }
 }
 
 function fmtEq(v) { return v < 0.01 && v > 0 ? '<0.01' : v >= 1000 ? (v/1000).toFixed(1)+'k' : fmt(v, v < 1 ? 2 : 1); }
@@ -262,25 +284,35 @@ async function refreshAll() {
   setGauge('gaugeRequests', logPct(totalReqs, 1000));
   setGauge('gaugeTokens', logPct(totalTokens, 1000000));
 
-  // Equivalents (rotates between two sets, context-aware: red vs green)
+  // Equivalents carousel: red labels when in debt, green when carbon-negative
   const isGreen = (balance.balance_grams || 0) <= 0 && (balance.total_offset_grams || 0) > 0;
   const eqColor = isGreen ? 'var(--primary)' : 'var(--red)';
-  const eqSets = [
-    [
-      { icon: 'mdi-car', val: equiv.cars_per_year, green: 'cars off the road*', red: 'cars on the road*' },
-      { icon: 'mdi-home-lightning-bolt', val: equiv.homes_energy_per_year, green: 'homes energy offset*', red: 'homes energy equivalent*' },
-      { icon: 'mdi-airplane', val: equiv.flights_la_nyc, green: 'flights LA-NYC offset', red: 'flights LA-NYC equivalent' },
-    ],
-    [
-      { icon: 'mdi-tree', val: equiv.trees_to_offset_yearly, green: 'trees/yr offset', red: 'trees/yr to neutralize' },
-      { icon: 'mdi-cellphone', val: equiv.smartphone_charges, green: 'phone charges offset', red: 'phone charges equivalent' },
-      { icon: 'mdi-magnify', val: equiv.google_searches, green: 'Google searches offset', red: 'Google searches equivalent' },
-    ],
+  // When carbon-negative, equivalents represent the surplus offset (not emissions).
+  // All equivalents are linear in CO2 grams, so we scale by surplus/emitted.
+  const emittedG = summary.total_co2_grams || 0;
+  const surplusG = Math.abs(balance.balance_grams || 0);
+  const eqScale = isGreen && emittedG > 0 ? surplusG / emittedG : 1;
+  const scaleEq = (v) => (typeof v === 'number' ? v * eqScale : v);
+  const items = [
+    { icon: 'mdi-car', val: scaleEq(equiv.cars_per_year), green: 'cars off the road*', red: 'cars on the road*' },
+    { icon: 'mdi-home-lightning-bolt', val: scaleEq(equiv.homes_energy_per_year), green: 'homes energy offset*', red: 'homes energy equivalent*' },
+    { icon: 'mdi-airplane', val: scaleEq(equiv.flights_la_nyc), green: 'flights LA-NYC offset', red: 'flights LA-NYC equivalent' },
+    { icon: 'mdi-tree', val: scaleEq(equiv.trees_to_offset_yearly), green: 'trees/yr offset', red: 'trees/yr to neutralize' },
+    { icon: 'mdi-cellphone', val: scaleEq(equiv.smartphone_charges), green: 'phone charges offset', red: 'phone charges equivalent' },
+    { icon: 'mdi-magnify', val: scaleEq(equiv.google_searches), green: 'Google searches offset', red: 'Google searches equivalent' },
+    { icon: 'mdi-road-variant', val: scaleEq(equiv.km_driven), green: 'km not driven', red: 'km driven equivalent' },
+    { icon: 'mdi-television-play', val: scaleEq(equiv.streaming_hours), green: 'streaming hrs offset', red: 'streaming hrs equivalent' },
+    { icon: 'mdi-email', val: scaleEq(equiv.emails_sent), green: 'emails offset', red: 'emails equivalent' },
+    { icon: 'mdi-coffee', val: scaleEq(equiv.coffee_cups), green: 'coffees offset', red: 'coffees equivalent' },
+    { icon: 'mdi-kettle', val: scaleEq(equiv.kettle_boils), green: 'kettle boils offset', red: 'kettle boils equivalent' },
+    { icon: 'mdi-washing-machine', val: scaleEq(equiv.laundry_loads), green: 'laundry loads offset', red: 'laundry loads equivalent' },
+    { icon: 'mdi-food-steak', val: scaleEq(equiv.beef_burgers), green: 'beef burgers offset', red: 'beef burgers equivalent' },
+    { icon: 'mdi-robot', val: scaleEq(equiv.chatgpt_queries), green: 'ChatGPT queries offset', red: 'ChatGPT queries equivalent' },
   ];
-  _latestEqSets = eqSets;
-  _latestEqGreen = isGreen;
-  _latestEqColor = eqColor;
-  renderEquivSet();
+  _carouselItems = items;
+  _carouselGreen = isGreen;
+  _carouselColor = eqColor;
+  renderCarousel();
 
   // Balance
   const emitted = balance.total_co2_grams || 0;
@@ -467,4 +499,91 @@ loadSources();
 refreshAll();
 setInterval(refreshAll, 3000);       // Data + power chart every 3s
 setInterval(loadSources, 60000);     // Refresh source list every minute
-setInterval(() => { _eqSetIndex++; renderEquivSet(); }, 10000); // Rotate equivalents every 10s
+// Equivalents carousel: continuous auto-scroll with drag + wheel control
+(function setupCarousel() {
+  const carousel = document.getElementById('equivCarousel');
+  if (!carousel) return;
+  const AUTO_PX_PER_FRAME = 0.4; // ~24px/sec
+  const PAUSE_AFTER_INTERACT_MS = 1500;
+  const MOMENTUM_FRICTION = 0.94;     // multiplied each frame, blends toward ambient
+  const MOMENTUM_MAX = 60;            // cap px/frame to avoid runaway flings
+  // Ambient momentum is what auto-scroll looks like in momentum-space.
+  // scrollLeft -= momentum, and forward auto-scroll is scrollLeft += AUTO_PX_PER_FRAME,
+  // so the equivalent ambient momentum is the negative of the forward speed.
+  const AMBIENT_MOMENTUM = -AUTO_PX_PER_FRAME;
+
+  let isDown = false, startX = 0, startScroll = 0;
+  let lastX = 0, lastT = 0, velocity = 0;
+  let momentum = AMBIENT_MOMENTUM;
+  let pausedUntil = 0; // wheel/trackpad uses this; drag uses momentum directly
+
+  function wrap() {
+    const third = carousel.scrollWidth / 3;
+    if (!third) return;
+    if (carousel.scrollLeft >= third * 2) carousel.scrollLeft -= third;
+    else if (carousel.scrollLeft < third * 0.5) carousel.scrollLeft += third;
+  }
+
+  function tick() {
+    if (!isDown) {
+      if (Date.now() > pausedUntil) {
+        // Decay momentum exponentially toward ambient drift, regardless of sign.
+        // A forward fling slows to ambient; a reverse fling slows, reverses, and resumes ambient.
+        momentum = AMBIENT_MOMENTUM + (momentum - AMBIENT_MOMENTUM) * MOMENTUM_FRICTION;
+        carousel.scrollLeft -= momentum;
+      } else {
+        // Wheel/trackpad in progress — let the user drive; reset momentum so we resume cleanly.
+        momentum = AMBIENT_MOMENTUM;
+      }
+    }
+    wrap();
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  carousel.addEventListener('mousedown', (e) => {
+    isDown = true;
+    startX = e.pageX;
+    startScroll = carousel.scrollLeft;
+    lastX = e.pageX;
+    lastT = performance.now();
+    velocity = 0;
+    momentum = 0;
+    carousel.classList.add('dragging');
+    e.preventDefault();
+  });
+  window.addEventListener('mouseup', () => {
+    if (!isDown) return;
+    isDown = false;
+    carousel.classList.remove('dragging');
+    // Convert velocity (px/ms) to px/frame (~16.67ms) and clamp.
+    // Sign convention: scrollLeft -= momentum, so positive velocity (drag right) yields
+    // positive momentum which decreases scrollLeft → reverse direction. Symmetric for fling-left.
+    momentum = Math.max(-MOMENTUM_MAX, Math.min(MOMENTUM_MAX, velocity * 16.67));
+    // No pause window — let momentum decay smoothly back to ambient.
+    pausedUntil = 0;
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!isDown) return;
+    carousel.scrollLeft = startScroll - (e.pageX - startX);
+    const now = performance.now();
+    const dt = now - lastT;
+    if (dt > 0) {
+      // Smooth velocity with EMA for stability
+      const instant = (e.pageX - lastX) / dt; // px/ms (positive = drag right)
+      velocity = velocity * 0.6 + instant * 0.4;
+    }
+    lastX = e.pageX;
+    lastT = now;
+  });
+
+  // Wheel/trackpad: pause auto-scroll briefly so user motion isn't fought
+  carousel.addEventListener('wheel', (e) => {
+    // Translate vertical wheel to horizontal scroll if user has no horizontal delta
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+      carousel.scrollLeft += e.deltaY;
+      e.preventDefault();
+    }
+    pausedUntil = Date.now() + PAUSE_AFTER_INTERACT_MS;
+  }, { passive: false });
+})();

@@ -97,23 +97,9 @@
   </div>
 </div>
 
-<!-- Equivalents (rotates between two sets) -->
-<div class="equivalents" id="equivContainer">
-  <div class="equiv">
-    <div class="equiv-icon" id="eq0Icon"><span class="mdi mdi-car"></span></div>
-    <div class="equiv-number" id="eq0Val">0</div>
-    <div class="equiv-desc" id="eq0Desc">--</div>
-  </div>
-  <div class="equiv">
-    <div class="equiv-icon" id="eq1Icon"><span class="mdi mdi-home-lightning-bolt"></span></div>
-    <div class="equiv-number" id="eq1Val">0</div>
-    <div class="equiv-desc" id="eq1Desc">--</div>
-  </div>
-  <div class="equiv">
-    <div class="equiv-icon" id="eq2Icon"><span class="mdi mdi-airplane"></span></div>
-    <div class="equiv-number" id="eq2Val">0</div>
-    <div class="equiv-desc" id="eq2Desc">--</div>
-  </div>
+<!-- Equivalents (auto-scrolling carousel, drag/scroll to navigate) -->
+<div class="equiv-carousel" id="equivCarousel">
+  <div class="equiv-track" id="equivTrack"></div>
 </div>
 
 <!-- Offset Balance -->
@@ -133,11 +119,11 @@
 
 <!-- Live Power -->
 <div class="section">
-  <div class="section-header">
-    <div class="section-title" onclick="toggleSection('livePower')" style="cursor:pointer">Live Power</div>
-    <div style="display:flex;align-items:center;gap:8px;">
-      <button class="btn" id="liveToggle" onclick="toggleLiveChart()" style="font-size:0.72rem;padding:4px 10px;">Pause</button>
-      <div class="section-toggle" id="livePower-arrow" onclick="toggleSection('livePower')" style="cursor:pointer">&#9660;</div>
+  <div class="section-header" onclick="toggleSection('livePower')">
+    <div class="section-title">Live Power</div>
+    <div class="section-actions">
+      <button class="btn" id="liveToggle" onclick="event.stopPropagation();toggleLiveChart()" style="font-size:0.72rem;padding:4px 10px;">Pause</button>
+      <div class="section-toggle" id="livePower-arrow">&#9660;</div>
     </div>
   </div>
   <div class="section-content" id="livePower">
