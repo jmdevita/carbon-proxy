@@ -184,6 +184,15 @@ function updatePowerChart(live) {
 
 // -- Daily breakdown: bar chart + heatmap --
 let _latestDaily = [];
+let _latestHeatmap = [];
+
+// Build query for heatmap: ignore time range, keep source filter only
+function buildHeatmapQuery() {
+  const params = new URLSearchParams();
+  if (activeSource) params.set('source', activeSource);
+  const qs = params.toString();
+  return qs ? '?' + qs : '';
+}
 
 function getDailyView() { return localStorage.getItem('dailyView') === 'heatmap' ? 'heatmap' : 'chart'; }
 function getHeatmapMetric() { return localStorage.getItem('heatmapMetric') || 'co2'; }
@@ -209,7 +218,7 @@ function updateDailyView() {
 }
 
 function renderDaily() {
-  if (getDailyView() === 'heatmap') renderHeatmap(_latestDaily, getHeatmapMetric());
+  if (getDailyView() === 'heatmap') renderHeatmap(_latestHeatmap, getHeatmapMetric());
   else renderDailyBarChart(_latestDaily);
 }
 
@@ -469,12 +478,13 @@ function renderCarousel() {
 function fmtEq(v) { return v < 0.01 && v > 0 ? '<0.01' : v >= 1000 ? (v/1000).toFixed(1)+'k' : fmt(v, v < 1 ? 2 : 1); }
 
 async function refreshAll() {
-  const [summary, equiv, balance, live, daily, reqs, offsets] = await Promise.all([
+  const [summary, equiv, balance, live, daily, dailyAll, reqs, offsets] = await Promise.all([
     fetch('/carbon/summary' + buildQuery()).then(r=>r.json()).catch(()=>({})),
     fetch('/carbon/equivalents' + buildQuery()).then(r=>r.json()).catch(()=>({})),
     fetch('/carbon/balance').then(r=>r.json()).catch(()=>({})),
     fetch('/carbon/live').then(r=>r.json()).catch(()=>({})),
     fetch('/carbon/daily' + buildQuery()).then(r=>r.json()).catch(()=>[]),
+    fetch('/carbon/daily' + buildHeatmapQuery()).then(r=>r.json()).catch(()=>[]),
     fetch('/carbon/requests' + buildQuery({limit:50})).then(r=>r.json()).catch(()=>[]),
     fetch('/carbon/offsets?limit=20').then(r=>r.json()).catch(()=>[]),
   ]);
@@ -558,7 +568,8 @@ async function refreshAll() {
   document.getElementById('activeR').textContent = live.active_requests || 0;
   updatePowerChart(live);
 
-  // Daily chart
+  // Daily chart (bar = filtered; heatmap = all-time, source-filtered only)
+  _latestHeatmap = dailyAll || [];
   updateDailyChart(daily);
 
   // Auto-offset banner + settings card
