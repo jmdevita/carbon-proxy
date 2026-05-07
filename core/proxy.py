@@ -142,7 +142,14 @@ async def _handle_non_streaming(
     start_time: float,
     request_id: str,
 ) -> Response:
-    resp = await http_client.send(upstream_req)
+    try:
+        resp = await http_client.send(upstream_req)
+    except Exception:
+        # Upstream failed before we got a response; close the active-request
+        # entry so it can't pin TDP-fallback power at the "active" load factor.
+        power_monitor.end_request(request_id, 0)
+        raise
+
     duration_ms = int((time.monotonic() - start_time) * 1000)
     body = resp.content
 
@@ -179,7 +186,13 @@ async def _handle_streaming(
     start_time: float,
     request_id: str,
 ) -> StreamingResponse:
-    resp = await http_client.send(upstream_req, stream=True)
+    try:
+        resp = await http_client.send(upstream_req, stream=True)
+    except Exception:
+        # Upstream connection failed; release the active-request slot so a
+        # leaked entry can't pin TDP-fallback power at the active load factor.
+        power_monitor.end_request(request_id, 0)
+        raise
 
     # Mutable state shared between generator and background task
     stream_state = {"last_data_line": "", "remainder": ""}
@@ -202,7 +215,10 @@ async def _handle_streaming(
                 pass  # Never interrupt the stream for usage extraction
 
     async def cleanup_and_log():
-        await resp.aclose()
+        try:
+            await resp.aclose()
+        except Exception:
+            pass
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
         tokens_in = 0
@@ -216,6 +232,9 @@ async def _handle_streaming(
             except (json.JSONDecodeError, KeyError) as e:
                 logger.warning("Failed to extract usage from streaming response: %s", e)
 
+        # end_request must run on every path (client disconnect mid-stream,
+        # upstream truncation, JSON parse failure) to avoid leaking active
+        # requests that pin TDP-fallback power at the active load factor.
         energy = power_monitor.end_request(request_id, tokens_out)
         energy_kwh = joules_to_kwh(energy.energy_joules)
         co2_grams = await asyncio.to_thread(calculate_co2, energy_kwh)

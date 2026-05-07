@@ -34,6 +34,12 @@ _CPU_TDP_BY_TOKENS: dict[frozenset[str], tuple[str, float]] = {}
 # Fallback: 4W per thread (CodeCarbon's default)
 _DEFAULT_WATTS_PER_THREAD = 4.0
 
+# Reap active requests that never called end_request() (client disconnect,
+# upstream error before the background task was wired up, etc.). A stuck
+# entry in _active_requests pins TDP-fallback power at 0.8 * TDP forever.
+_STALE_REQUEST_TIMEOUT_S = 600.0
+_REAP_INTERVAL_S = 30.0
+
 
 def _normalize_cpu_name(raw: str) -> str:
     """Normalize CPU name like CodeCarbon: strip (R), (TM), CPU, clock speed."""
@@ -260,16 +266,21 @@ class PowerMonitor:
         self._detect_cpu_sensor()
         self._detect_gpu_sensor()
 
-        if self._cpu_method in ("rapl", "powermetrics") or self._gpu_method in ("nvml", "hwmon", "rapl_gt", "powermetrics"):
-            self._power_source = "measured"
-        elif self._cpu_method == "tdp" or self._gpu_method == "tdp":
-            self._power_source = "estimated"
-        else:
+        # Aggregate source label: "measured" only if every present component
+        # is reading from a real sensor. If any component falls back to TDP,
+        # the total is partially estimated and must be labelled as such.
+        measured_methods = {"rapl", "powermetrics", "nvml", "hwmon", "rapl_gt"}
+        present = [m for m in (self._cpu_method, self._gpu_method) if m]
+        if not present:
             logger.warning(
                 "No power sensors or TDP values configured. "
                 "Set TDP_CPU_WATTS and TDP_GPU_WATTS for estimation, "
                 "or mount /sys/class/powercap for RAPL."
             )
+        elif all(m in measured_methods for m in present):
+            self._power_source = "measured"
+        else:
+            self._power_source = "estimated"
 
         logger.info(
             "Power detection complete: cpu=%s, gpu=%s, source=%s",
@@ -571,6 +582,21 @@ class PowerMonitor:
             self._read_powermetrics()
             self._stop_event.wait(1.0)  # Read every 1 second
 
+    def _reap_stale_requests(self):
+        now = time.monotonic()
+        with self._lock:
+            stale = [
+                rid for rid, r in self._active_requests.items()
+                if now - r.start_time > _STALE_REQUEST_TIMEOUT_S
+            ]
+            for rid in stale:
+                del self._active_requests[rid]
+        if stale:
+            logger.warning(
+                "Reaped %d stale active request(s) older than %.0fs",
+                len(stale), _STALE_REQUEST_TIMEOUT_S,
+            )
+
     def _sample_loop(self):
         interval = 1.0 / settings.power_sample_hz
 
@@ -581,6 +607,7 @@ class PowerMonitor:
             )
             pm_thread.start()
 
+        last_reap = time.monotonic()
         while not self._stop_event.is_set():
             cpu_w = self._read_cpu_watts()
             gpu_w = self._read_gpu_watts()
@@ -591,6 +618,11 @@ class PowerMonitor:
             )
             with self._lock:
                 self._samples.append(sample)
+
+            if sample.timestamp - last_reap >= _REAP_INTERVAL_S:
+                self._reap_stale_requests()
+                last_reap = sample.timestamp
+
             self._stop_event.wait(interval)
 
     def start(self):
