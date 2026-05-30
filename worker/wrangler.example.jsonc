@@ -1,0 +1,37 @@
+// Template config. On first checkout:
+//   cp wrangler.example.jsonc wrangler.jsonc
+//   then fill in the four placeholders below.
+//
+// `wrangler.jsonc` is gitignored so your real hostnames + KV namespace ID
+// stay out of the repo.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "carbon-proxy-auth",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-05-30",
+
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+
+  "vars": {
+    // Hostname clients hit (where this worker is bound as a custom domain).
+    "PUBLIC_HOST": "api.example.com",
+    // Hostname the worker forwards to (tunnel exit → carbon-proxy origin).
+    "ORIGIN_HOST": "carbon.example.com"
+  },
+
+  "kv_namespaces": [
+    // Create with: wrangler kv namespace create carbon-proxy-api-keys
+    // Then paste the returned ID here. Binding name must stay "API_KEYS"
+    // so it matches `env.API_KEYS.get(...)` in src/worker.js.
+    { "binding": "API_KEYS", "id": "REPLACE_WITH_KV_NAMESPACE_ID" }
+  ],
+
+  "routes": [
+    // Should match PUBLIC_HOST above. CF auto-creates the DNS record on first
+    // deploy and provisions a TLS cert. Hostname must be a CF-managed zone.
+    { "pattern": "api.example.com", "custom_domain": true }
+  ]
+}

@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     # How often the reconciler heals drift between local DB and KV (seconds).
     kv_reconciler_interval_s: int = 300
 
+    # Shared secret between the Cloudflare worker and origin. When set, the
+    # proxy catch-all rejects requests that don't carry a matching
+    # X-Worker-Origin-Secret header. This blocks direct-origin bypass of the
+    # worker's bearer check. Leave empty to disable (e.g. for local dev).
+    worker_origin_secret: str = ""
+
     @field_validator("power_sample_hz")
     @classmethod
     def validate_sample_hz(cls, v):

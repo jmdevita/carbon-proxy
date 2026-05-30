@@ -1,0 +1,9 @@
+node_modules/
+.wrangler/
+.dev.vars
+.env
+*.log
+
+# Real config has your hostnames + KV namespace ID.
+# Commit wrangler.example.jsonc; copy it to wrangler.jsonc locally.
+wrangler.jsonc

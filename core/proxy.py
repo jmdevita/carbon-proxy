@@ -74,6 +74,19 @@ def _forward_headers(headers, exclude=HOP_BY_HOP):
 
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def proxy_request(request: Request, path: str):
+    # Defense against direct-origin bypass: when configured, every request
+    # reaching the catch-all must carry the worker's shared secret. Through
+    # the worker this header is auto-set; direct curls to the tunnel hostname
+    # have no way to supply it without insider access.
+    if settings.worker_origin_secret:
+        provided = request.headers.get("x-worker-origin-secret", "")
+        if provided != settings.worker_origin_secret:
+            return Response(
+                content='{"error":"missing or invalid worker origin secret"}',
+                status_code=401,
+                media_type="application/json",
+            )
+
     body = await request.body()
     target_path = f"/{path}" if path else "/"
     url = httpx.URL(path=target_path, query=request.url.query.encode() if request.url.query else None)

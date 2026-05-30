@@ -1,0 +1,15 @@
+{
+  "name": "carbon-proxy-auth",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker fronting carbon-proxy: validates bearer tokens against KV and forwards to origin with X-Carbon-Source label.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:dry": "wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "wrangler": "^4.95.0"
+  }
+}
