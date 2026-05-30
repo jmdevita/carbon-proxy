@@ -62,6 +62,16 @@ def _public_row(row: dict) -> dict:
     }
 
 
+@router.get("/_client_config")
+async def client_config():
+    """Small bag of values the dashboard needs to render snippets.
+
+    Lives under /carbon/api_keys to keep the namespace cohesive. Underscore
+    prefix avoids any chance of a future numeric key_id colliding.
+    """
+    return {"public_api_url": settings.public_api_url}
+
+
 @router.get("")
 async def list_keys(include_revoked: bool = False):
     rows = await asyncio.to_thread(db.api_key_list, include_revoked)
@@ -116,6 +126,24 @@ async def create_key(
         "token": plaintext,
         "warning": "Save this token now -- it will not be shown again.",
     }
+
+
+@router.get("/{key_id}/stats")
+async def key_stats(key_id: int, range: str = "7d"):
+    """Per-key rollup powering the card sparkline + drill-down.
+
+    `range` is currently advisory -- we always compute a 7-day window because
+    the sparkline expects exactly 7 daily buckets. Kept as a query param so
+    we can extend to 30d/90d later without breaking the URL shape.
+    """
+    row = await asyncio.to_thread(db.api_key_get, key_id)
+    if not row:
+        raise HTTPException(404, "API key not found.")
+
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    stats = await asyncio.to_thread(db.api_key_stats, row["label"], since)
+    return stats
 
 
 @router.patch("/{key_id}")

@@ -74,11 +74,19 @@ def _forward_headers(headers, exclude=HOP_BY_HOP):
 
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def proxy_request(request: Request, path: str):
-    # Defense against direct-origin bypass: when configured, every request
-    # reaching the catch-all must carry the worker's shared secret. Through
+    # Defense against direct-origin bypass: when configured, requests that
+    # came through Cloudflare must carry the worker's shared secret. Through
     # the worker this header is auto-set; direct curls to the tunnel hostname
     # have no way to supply it without insider access.
-    if settings.worker_origin_secret:
+    #
+    # We gate on CF-Connecting-IP because cloudflared sets it on every
+    # forwarded request, while internal docker callers (openwebui, local
+    # scripts hitting carbon-proxy:8080) never do. Spoofing it from inside
+    # the docker network can only force the check ON for yourself -- it
+    # can't disable the check for an external attacker, since external
+    # traffic always traverses cloudflared.
+    came_via_cloudflare = "cf-connecting-ip" in request.headers
+    if settings.worker_origin_secret and came_via_cloudflare:
         provided = request.headers.get("x-worker-origin-secret", "")
         if provided != settings.worker_origin_secret:
             return Response(

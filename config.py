@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     # worker's bearer check. Leave empty to disable (e.g. for local dev).
     worker_origin_secret: str = ""
 
+    # Public base URL clients should use to call this API (e.g.
+    # "https://api.devita.dev"). The dashboard embeds this into the snippets
+    # shown on key creation so users can copy-paste a working curl/Python/etc.
+    # Empty -> dashboard falls back to its own origin.
+    public_api_url: str = ""
+
     @field_validator("power_sample_hz")
     @classmethod
     def validate_sample_hz(cls, v):

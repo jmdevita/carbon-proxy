@@ -466,6 +466,98 @@ def api_key_active_map() -> dict[str, str]:
         return {row["key_hash"]: row["label"] for row in rows}
 
 
+def api_key_stats(label: str, since_iso: str, recent_limit: int = 10) -> dict:
+    """Per-key rollup for the dashboard card + drill-down.
+
+    `requests` are keyed by `source` (the label). If two keys share a label
+    their stats merge -- acceptable for now since labels are how users
+    distinguish keys anyway.
+
+    Returns:
+        totals: dict with request count, tokens, energy, co2 since `since_iso`
+        daily_series: list of {date, requests, co2_grams} for the past 7 days
+            (always 7 entries, oldest first, zero-filled for empty days)
+        primary_model: model with the most requests in the window, or None
+        recent_requests: latest N requests for this source (any time, capped)
+    """
+    with _db_lock:
+        conn = _get_conn()
+
+        totals_row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total_requests,
+                COALESCE(SUM(tokens_in + tokens_out), 0) AS total_tokens,
+                COALESCE(SUM(energy_joules) / 3600000.0, 0) AS total_energy_kwh,
+                COALESCE(SUM(co2_grams), 0) AS total_co2_grams
+            FROM requests
+            WHERE source = ? AND timestamp >= ?
+            """,
+            (label, since_iso),
+        ).fetchone()
+        totals = dict(totals_row)
+
+        # Daily counts since the window start. The frontend pads to 7 days so
+        # the sparkline always has the same x-axis even when days are empty.
+        daily_rows = conn.execute(
+            """
+            SELECT
+                DATE(timestamp) AS date,
+                COUNT(*) AS requests,
+                COALESCE(SUM(co2_grams), 0) AS co2_grams
+            FROM requests
+            WHERE source = ? AND timestamp >= ?
+            GROUP BY DATE(timestamp)
+            ORDER BY date ASC
+            """,
+            (label, since_iso),
+        ).fetchall()
+        daily_by_date = {r["date"]: dict(r) for r in daily_rows}
+
+        # Pad to exactly 7 days ending today (UTC). Keeps sparkline shape
+        # stable regardless of activity. Use UTC explicitly so a non-UTC
+        # container TZ can't drift the bucket boundaries.
+        from datetime import timedelta
+        today = datetime.now(timezone.utc).date()
+        daily_series = []
+        for i in range(6, -1, -1):
+            d = (today - timedelta(days=i)).isoformat()
+            row = daily_by_date.get(d, {"date": d, "requests": 0, "co2_grams": 0.0})
+            daily_series.append(row)
+
+        primary_row = conn.execute(
+            """
+            SELECT model, COUNT(*) AS n
+            FROM requests
+            WHERE source = ? AND timestamp >= ? AND model != ''
+            GROUP BY model
+            ORDER BY n DESC
+            LIMIT 1
+            """,
+            (label, since_iso),
+        ).fetchone()
+        primary_model = primary_row["model"] if primary_row else None
+
+        recent_rows = conn.execute(
+            """
+            SELECT timestamp, model, tokens_in, tokens_out, duration_ms,
+                   energy_joules, co2_grams
+            FROM requests
+            WHERE source = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (label, recent_limit),
+        ).fetchall()
+
+    return {
+        "totals": totals,
+        "daily_series": daily_series,
+        "primary_model": primary_model,
+        "recent_requests": [dict(r) for r in recent_rows],
+    }
+
+
 def api_key_revoked_hashes() -> set[str]:
     """Hashes of revoked keys -- reconciler ensures these are absent from KV."""
     with _db_lock:

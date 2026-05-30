@@ -610,7 +610,16 @@ function getOffsetKey() {
 }
 
 // -- API Keys management --
+const IDLE_THRESHOLD_DAYS = 30;
+const FRESH_THRESHOLD_HOURS = 24;
 let _apiKeyLabelsById = {};
+let _apiKeyById = {};            // id -> full key row, used by drilldown
+let _expandedKeyId = null;       // currently-open drilldown
+let _publicApiUrl = null;        // populated from /carbon/api_keys/_client_config
+let _newKeyToken = null;         // plaintext, lives only while reveal modal is open
+let _newKeyLabel = null;
+let _activeSnippet = 'curl';
+let _renamingKeyId = null;        // set during inline rename; skips polled re-renders
 
 function fmtDate(iso) {
   if (!iso) return '--';
@@ -620,46 +629,407 @@ function fmtDate(iso) {
   return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
 }
 
+// Relative-time formatter scoped to dashboard sensibilities: anything older
+// than a couple weeks falls back to absolute date so the cards don't claim
+// "42d ago" for a year-old key.
+function fmtRel(iso) {
+  if (!iso) return 'never';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return 'just now';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s <= 5 ? 'just now' : s + 's ago';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + ' min ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + ' hr ago';
+  const d = Math.floor(h / 24);
+  if (d < 14) return d + 'd ago';
+  return fmtDate(iso);
+}
+
+function daysSince(iso) {
+  if (!iso) return Infinity;
+  return (Date.now() - new Date(iso).getTime()) / 86400000;
+}
+
+function badgeFor(key) {
+  if (key.revoked_at) return '<span class="badge badge-revoked">Revoked</span>';
+  const createdDays = daysSince(key.created_at);
+  // Never-used keys: fresh if under the 24h grace window, otherwise idle
+  // based on creation age (not last_used_at, which is null).
+  if (!key.last_used_at) {
+    if (createdDays * 24 < FRESH_THRESHOLD_HOURS) {
+      return '<span class="badge badge-fresh">New</span>';
+    }
+    return `<span class="badge badge-idle">Unused ${Math.floor(createdDays)}d</span>`;
+  }
+  const usedDays = daysSince(key.last_used_at);
+  if (usedDays > IDLE_THRESHOLD_DAYS) {
+    return `<span class="badge badge-idle">Idle ${Math.floor(usedDays)}d</span>`;
+  }
+  return '<span class="badge badge-active">Active</span>';
+}
+
+// Build a sparkline path from the 7-day daily_series. Always renders something
+// (dotted baseline when there's no activity) so the card layout stays stable.
+function renderSparkline(series, w = 140, h = 26) {
+  if (!series || !series.length) {
+    return `<svg class="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+      <line x1="0" y1="${h-2}" x2="${w}" y2="${h-2}" class="spark-empty"/></svg>`;
+  }
+  const max = Math.max(1, ...series.map(d => d.requests || 0));
+  const empty = series.every(d => (d.requests || 0) === 0);
+  if (empty) {
+    return `<svg class="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+      <line x1="0" y1="${h-2}" x2="${w}" y2="${h-2}" class="spark-empty"/></svg>`;
+  }
+  const stepX = w / (series.length - 1 || 1);
+  const pad = 2;
+  const pts = series.map((d, i) => {
+    const x = i * stepX;
+    const y = h - pad - ((d.requests || 0) / max) * (h - pad * 2);
+    return [x, y];
+  });
+  const line = pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const area = `M0,${h} L${line.slice(1)} L${w},${h} Z`;
+  return `<svg class="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <path d="${area}" class="spark-area"/>
+    <path d="${line}" class="spark-line"/>
+  </svg>`;
+}
+
 async function loadApiKeys() {
+  // Hold off the polled re-render while the user is mid-rename. Without this,
+  // the 30s setInterval would yank the input element out from under their cursor.
+  if (_renamingKeyId != null) return;
   const showRevoked = document.getElementById('apiKeyShowRevoked').checked;
-  const tb = document.getElementById('apiKeysTb');
+  const grid = document.getElementById('apiKeysGrid');
   try {
     const r = await fetch('/carbon/api_keys?include_revoked=' + showRevoked);
     const keys = await r.json();
     if (!keys.length) {
-      tb.innerHTML = '<tr><td colspan="6" style="color:var(--muted);text-align:center;">No keys yet. Click "New Key" to create one.</td></tr>';
+      grid.innerHTML = '<div class="keys-empty">No keys yet. Click "New Key" to create one.</div>';
+      _apiKeyLabelsById = {};
+      _apiKeyById = {};
       return;
     }
-    // Stash labels by id for the revoke confirm dialog so we don't have to
-    // interpolate user-controlled strings into an onclick attribute (esc()
-    // doesn't HTML-encode quotes, so labels with " could break the attribute).
     _apiKeyLabelsById = {};
-    tb.innerHTML = keys.map(k => {
+    _apiKeyById = {};
+    grid.innerHTML = keys.map(k => {
       _apiKeyLabelsById[k.id] = k.label;
-      const revoked = !!k.revoked_at;
-      const badge = revoked
-        ? `<span class="badge-revoked">revoked</span>`
-        : `<span class="badge-active">active</span>`;
-      const action = revoked
-        ? ''
-        : `<button class="btn btn-danger" style="font-size:0.72rem;padding:3px 10px;" onclick="revokeApiKey(${k.id})">Revoke</button>`;
-      return `<tr>
-        <td>${esc(k.label)}</td>
-        <td style="color:var(--muted);">${esc(k.notes || '')}</td>
-        <td>${fmtDate(k.created_at)}</td>
-        <td>${fmtDate(k.last_used_at)}</td>
-        <td>${badge}</td>
-        <td style="text-align:right;">${action}</td>
-      </tr>`;
+      _apiKeyById[k.id] = k;
+      return renderKeyCard(k);
     }).join('');
+
+    // Hydrate per-card head stats (req count + sparkline) in parallel.
+    // Fire-and-forget so cards appear instantly; values fill in as they
+    // arrive. Skip revoked keys -- their head stats are blanked by design.
+    keys.filter(k => !k.revoked_at).forEach(k => loadKeyStats(k.id));
+
+    // If a drilldown was open, re-expand it so periodic refresh doesn't slam it shut.
+    if (_expandedKeyId != null && _apiKeyById[_expandedKeyId]) {
+      const card = document.querySelector(`.key-card[data-key-id="${_expandedKeyId}"]`);
+      if (card) card.classList.add('expanded');
+      // loadKeyStats was already fired by the forEach above; expanded card's
+      // drilldown body will populate as part of that same fetch.
+    }
   } catch (e) {
-    tb.innerHTML = '<tr><td colspan="6" style="color:var(--red);text-align:center;">Failed to load API keys.</td></tr>';
+    grid.innerHTML = '<div class="keys-empty" style="color:var(--red);">Failed to load API keys.</div>';
   }
+}
+
+function renderKeyCard(k) {
+  const revoked = !!k.revoked_at;
+  const used = daysSince(k.last_used_at);
+  const idleWarn = !revoked && used > IDLE_THRESHOLD_DAYS && isFinite(used)
+    ? `<div class="key-meta-item key-meta-warn"><i class="mdi mdi-alert-circle-outline"></i> consider revoking</div>`
+    : '';
+  const notes = k.notes
+    ? `<div class="key-notes">${esc(k.notes)}</div>`
+    : '';
+  return `<div class="key-card ${revoked ? 'revoked' : ''}" data-key-id="${k.id}">
+    <div class="key-card-head" onclick="toggleKeyCard(event, ${k.id})">
+      <div class="key-main">
+        <div class="key-row1">
+          <div class="key-label">${esc(k.label)}</div>
+          ${badgeFor(k)}
+        </div>
+        ${notes}
+        <div class="key-meta">
+          <div class="key-meta-item"><i class="mdi mdi-calendar-blank"></i> created ${fmtRel(k.created_at)}</div>
+          <div class="key-meta-item"><i class="mdi mdi-clock-outline"></i> last used <strong>${fmtRel(k.last_used_at)}</strong></div>
+          ${idleWarn}
+        </div>
+      </div>
+      <div class="key-stats">
+        <div class="key-stat-block" data-key-totals="${k.id}">
+          <div class="key-stat-row">
+            <div class="key-stat">
+              <div><span class="key-stat-num">--</span></div>
+              <div class="key-stat-label">7d req</div>
+            </div>
+          </div>
+          ${renderSparkline(null)}
+        </div>
+        ${revoked ? '' : '<div class="key-expand-arrow"><i class="mdi mdi-chevron-down"></i></div>'}
+      </div>
+    </div>
+    <div class="key-drilldown" id="drilldown-${k.id}"></div>
+  </div>`;
+}
+
+async function toggleKeyCard(ev, keyId) {
+  const card = document.querySelector(`.key-card[data-key-id="${keyId}"]`);
+  if (!card || card.classList.contains('revoked')) return;
+  // Inline rename input shouldn't double as a toggle.
+  if (ev && ev.target && ev.target.closest('.key-rename-input')) return;
+
+  const isOpen = card.classList.contains('expanded');
+  // Close any other open card -- only one drilldown at a time keeps the page tidy.
+  document.querySelectorAll('.key-card.expanded').forEach(c => {
+    if (c !== card) c.classList.remove('expanded');
+  });
+  if (isOpen) {
+    card.classList.remove('expanded');
+    _expandedKeyId = null;
+    return;
+  }
+  card.classList.add('expanded');
+  _expandedKeyId = keyId;
+  await loadKeyStats(keyId);
+}
+
+async function loadKeyStats(keyId) {
+  const totalsBlock = document.querySelector(`[data-key-totals="${keyId}"]`);
+  const drill = document.getElementById('drilldown-' + keyId);
+  if (!drill) return;
+  drill.innerHTML = '<div class="keys-empty" style="padding:14px;">Loading...</div>';
+  try {
+    const r = await fetch(`/carbon/api_keys/${keyId}/stats?range=7d`);
+    if (!r.ok) throw new Error('stats fetch failed');
+    const s = await r.json();
+    const t = s.totals || {};
+
+    // Update the always-visible head stats (req count + sparkline) in place.
+    if (totalsBlock) {
+      totalsBlock.innerHTML = `
+        <div class="key-stat-row">
+          <div class="key-stat">
+            <div><span class="key-stat-num">${(t.total_requests || 0).toLocaleString()}</span></div>
+            <div class="key-stat-label">7d req</div>
+          </div>
+          <div class="key-stat">
+            <div><span class="key-stat-num">${fmt(t.total_co2_grams || 0, 2)}</span><span class="key-stat-unit">g CO2</span></div>
+            <div class="key-stat-label">7d</div>
+          </div>
+        </div>
+        ${renderSparkline(s.daily_series)}`;
+    }
+
+    // Drilldown: 4 mini-stats + recent requests slice.
+    const primaryRow = s.primary_model
+      ? `<div class="drilldown-subhead">primary model: <strong style="color:var(--text);">${esc(s.primary_model)}</strong></div>`
+      : '';
+    const reqsBody = (s.recent_requests || []).length
+      ? s.recent_requests.map(r => `<tr>
+          <td>${fmtRel(r.timestamp)}</td>
+          <td>${esc(r.model || '--')}</td>
+          <td>${r.tokens_in}</td>
+          <td>${r.tokens_out}</td>
+          <td>${fmtDur(r.duration_ms)}</td>
+          <td>${fmt(r.co2_grams, 4)}g</td>
+        </tr>`).join('')
+      : '<tr><td colspan="6" style="color:var(--muted);text-align:center;">No requests recorded for this key yet.</td></tr>';
+
+    drill.innerHTML = `
+      <div class="drilldown-actions">
+        <button class="btn" style="font-size:0.7rem;padding:3px 10px;" onclick="event.stopPropagation();startRename(${keyId})">Rename</button>
+        <button class="btn btn-danger" style="font-size:0.7rem;padding:3px 10px;" onclick="event.stopPropagation();revokeApiKey(${keyId})">Revoke</button>
+      </div>
+      <div class="drilldown-grid">
+        <div class="mini-stat">
+          <div class="mini-stat-num">${(t.total_requests || 0).toLocaleString()}</div>
+          <div class="mini-stat-label">Requests</div>
+        </div>
+        <div class="mini-stat">
+          <div class="mini-stat-num">${fmtShort(t.total_tokens || 0)}</div>
+          <div class="mini-stat-label">Tokens</div>
+        </div>
+        <div class="mini-stat">
+          <div class="mini-stat-num">${fmt(t.total_energy_kwh || 0, 4)}<small>kWh</small></div>
+          <div class="mini-stat-label">Energy</div>
+        </div>
+        <div class="mini-stat">
+          <div class="mini-stat-num">${fmt(t.total_co2_grams || 0, 2)}<small>g</small></div>
+          <div class="mini-stat-label">CO2</div>
+        </div>
+      </div>
+      ${primaryRow}
+      <div class="drilldown-subhead">Recent requests</div>
+      <table class="mini-table">
+        <thead><tr><th>When</th><th>Model</th><th>In</th><th>Out</th><th>Dur</th><th>CO2</th></tr></thead>
+        <tbody>${reqsBody}</tbody>
+      </table>`;
+  } catch (e) {
+    drill.innerHTML = '<div class="keys-empty" style="color:var(--red);padding:14px;">Failed to load stats.</div>';
+  }
+}
+
+function startRename(keyId) {
+  const card = document.querySelector(`.key-card[data-key-id="${keyId}"]`);
+  if (!card) return;
+  const labelEl = card.querySelector('.key-label');
+  const current = _apiKeyLabelsById[keyId] || '';
+  // Replace label text with an input that submits on Enter / blur.
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = current;
+  input.maxLength = 64;
+  input.className = 'key-rename-input';
+  _renamingKeyId = keyId;
+  let committed = false;
+  const finish = () => { _renamingKeyId = null; };
+  const commit = async () => {
+    if (committed) return; committed = true;
+    const newLabel = input.value.trim();
+    if (!newLabel || newLabel === current) {
+      labelEl.textContent = current;
+      finish();
+      return;
+    }
+    const key = getOffsetKey();
+    if (!key) { labelEl.textContent = current; finish(); return; }
+    try {
+      const r = await fetch('/carbon/api_keys/' + keyId, {
+        method: 'PATCH',
+        headers: {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'},
+        body: JSON.stringify({label: newLabel}),
+      });
+      if (!r.ok) {
+        if (r.status === 401) localStorage.removeItem('offset_api_key');
+        labelEl.textContent = current;
+        finish();
+        alert('Rename failed.');
+        return;
+      }
+      finish();
+      loadApiKeys();
+    } catch (e) {
+      labelEl.textContent = current;
+      finish();
+    }
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    else if (e.key === 'Escape') { committed = true; labelEl.textContent = current; finish(); }
+  });
+  input.addEventListener('blur', commit);
+  input.addEventListener('click', (e) => e.stopPropagation());
+  labelEl.textContent = '';
+  labelEl.appendChild(input);
+  input.focus();
+  input.select();
+}
+
+// -- Create-key wizard (step 2: token reveal + snippets) --
+
+async function fetchClientConfig() {
+  if (_publicApiUrl !== null) return _publicApiUrl;
+  try {
+    const r = await fetch('/carbon/api_keys/_client_config');
+    const d = await r.json();
+    _publicApiUrl = d.public_api_url || window.location.origin;
+  } catch (e) {
+    _publicApiUrl = window.location.origin;
+  }
+  return _publicApiUrl;
+}
+
+function snippetFor(name, token, label, apiBase) {
+  // All templates are stitched as escaped HTML; we color via inline spans
+  // (no innerHTML from the user -- only `token` and `label`, which we esc()).
+  const tok = `<span class="snippet-token">${esc(token)}</span>`;
+  const lbl = esc(label || 'my-client');
+  if (name === 'curl') {
+    return `<span class="snippet-comment"># Test the new token</span>
+curl ${esc(apiBase)}/v1/chat/completions \\
+  -H <span class="snippet-str">"Content-Type: application/json"</span> \\
+  -H <span class="snippet-str">"Authorization: Bearer ${tok}"</span> \\
+  -d <span class="snippet-str">'{
+    "model": "gpt-oss-120b",
+    "messages": [{"role": "user", "content": "hello"}]
+  }'</span>`;
+  }
+  if (name === 'python') {
+    return `<span class="snippet-comment"># pip install openai</span>
+<span class="snippet-key">from</span> openai <span class="snippet-key">import</span> OpenAI
+
+client = OpenAI(
+    base_url=<span class="snippet-str">"${esc(apiBase)}/v1"</span>,
+    api_key=<span class="snippet-str">"${tok}"</span>,
+)
+
+resp = client.chat.completions.create(
+    model=<span class="snippet-str">"gpt-oss-120b"</span>,
+    messages=[{<span class="snippet-str">"role"</span>: <span class="snippet-str">"user"</span>, <span class="snippet-str">"content"</span>: <span class="snippet-str">"hello"</span>}],
+)
+<span class="snippet-key">print</span>(resp.choices[<span class="snippet-str">0</span>].message.content)`;
+  }
+  if (name === 'openwebui') {
+    return `<span class="snippet-comment"># Settings -> Connections -> "+ Add OpenAI API Connection"</span>
+
+<span class="snippet-key">API Base URL</span>:  ${esc(apiBase)}/v1
+<span class="snippet-key">API Key</span>:       ${tok}
+<span class="snippet-key">Prefix ID</span>:     ${lbl}  <span class="snippet-comment"># optional, namespaces model names</span>
+
+<span class="snippet-comment"># Then "Verify Connection" -- models should populate automatically.</span>`;
+  }
+  if (name === 'claudecode') {
+    return `<span class="snippet-comment"># One-shot env vars for the current shell:</span>
+<span class="snippet-key">export</span> ANTHROPIC_BASE_URL=<span class="snippet-str">"${esc(apiBase)}"</span>
+<span class="snippet-key">export</span> ANTHROPIC_AUTH_TOKEN=<span class="snippet-str">"${tok}"</span>
+claude
+
+<span class="snippet-comment"># Or persist via ~/.claude/settings.json:</span>
+{
+  <span class="snippet-str">"env"</span>: {
+    <span class="snippet-str">"ANTHROPIC_BASE_URL"</span>: <span class="snippet-str">"${esc(apiBase)}"</span>,
+    <span class="snippet-str">"ANTHROPIC_AUTH_TOKEN"</span>: <span class="snippet-str">"${tok}"</span>
+  }
+}`;
+  }
+  return '';
+}
+
+function renderSnippet(name) {
+  if (!_newKeyToken) return;
+  _activeSnippet = name;
+  document.querySelectorAll('#snippetTabs .snippet-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.snippet === name);
+  });
+  document.getElementById('snippetContent').innerHTML =
+    snippetFor(name, _newKeyToken, _newKeyLabel, _publicApiUrl || window.location.origin);
+}
+
+function copySnippet() {
+  // Copy from .textContent so the snippet-* color spans don't pollute the clipboard.
+  const text = document.getElementById('snippetContent').textContent;
+  const btn = document.getElementById('snippetCopyBtn');
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  }).catch(() => {
+    const range = document.createRange();
+    range.selectNode(document.getElementById('snippetContent'));
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+  });
 }
 
 function openCreateKeyModal() {
   document.getElementById('createKeyForm').style.display = '';
   document.getElementById('createKeyReveal').style.display = 'none';
+  document.getElementById('createKeyTitle').textContent = 'Create API Key';
   document.getElementById('createKeyLabel').value = '';
   document.getElementById('createKeyNotes').value = '';
   document.getElementById('createKeyStatus').textContent = '';
@@ -668,14 +1038,20 @@ function openCreateKeyModal() {
   document.getElementById('createKeyConfirm').textContent = 'Create';
   document.getElementById('createKeyModal').classList.add('active');
   document.getElementById('createKeyLabel').focus();
+  // Warm the cache so the snippet step renders instantly with the right URL.
+  fetchClientConfig();
 }
 
 function closeCreateKeyModal() {
   document.getElementById('createKeyModal').classList.remove('active');
-  // Wipe the plaintext token from the DOM -- it would otherwise sit there
-  // until the next create or a page refresh.
+  // Wipe the plaintext token from the DOM + module state -- it would
+  // otherwise linger until the next create or a page refresh.
   document.getElementById('createKeyToken').textContent = '';
-  loadApiKeys();  // refresh table in case a key was created
+  document.getElementById('snippetContent').innerHTML = '';
+  _newKeyToken = null;
+  _newKeyLabel = null;
+  _activeSnippet = 'curl';
+  loadApiKeys();  // refresh list in case a key was created
 }
 
 async function createApiKey() {
@@ -712,10 +1088,15 @@ async function createApiKey() {
       btn.textContent = 'Create';
       return;
     }
-    // Swap form for reveal
+    // Swap form for reveal + snippets
     document.getElementById('createKeyForm').style.display = 'none';
     document.getElementById('createKeyReveal').style.display = '';
+    document.getElementById('createKeyTitle').textContent = 'Connect a client';
     document.getElementById('createKeyToken').textContent = d.token;
+    _newKeyToken = d.token;
+    _newKeyLabel = label;
+    await fetchClientConfig();
+    renderSnippet(_activeSnippet);
   } catch (e) {
     status.textContent = 'Network error.';
     status.style.color = 'var(--red)';
@@ -759,11 +1140,19 @@ async function revokeApiKey(id) {
     }
     const d = await r.json();
     if (d.warning) alert('Key revoked locally, but: ' + d.warning);
+    if (_expandedKeyId === id) _expandedKeyId = null;
     loadApiKeys();
   } catch (e) {
     alert('Network error revoking key.');
   }
 }
+
+// Snippet tab click delegation -- a single listener handles all four tabs
+// regardless of when the create modal is rendered.
+document.addEventListener('click', (e) => {
+  const tab = e.target.closest('#snippetTabs .snippet-tab');
+  if (tab && tab.dataset.snippet) renderSnippet(tab.dataset.snippet);
+});
 
 async function openOffsetModal() {
   const modal = document.getElementById('offsetModal');

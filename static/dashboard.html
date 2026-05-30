@@ -229,12 +229,9 @@
     </div>
   </div>
   <div class="section-content" id="apiKeysSection">
-    <div class="table-card"><div class="table-scroll">
-      <table>
-        <thead><tr><th>Label</th><th>Notes</th><th>Created</th><th>Last Used</th><th>Status</th><th></th></tr></thead>
-        <tbody id="apiKeysTb"><tr><td colspan="6" style="color:var(--muted);text-align:center;">--</td></tr></tbody>
-      </table>
-    </div></div>
+    <div class="keys-grid" id="apiKeysGrid">
+      <div class="keys-empty">Loading...</div>
+    </div>
   </div>
 </div>
 
@@ -276,8 +273,10 @@
 
 <!-- Create API Key Modal -->
 <div class="modal-overlay" id="createKeyModal" onclick="if(event.target===this)closeCreateKeyModal()">
-  <div class="modal">
-    <h3>Create API Key</h3>
+  <div class="modal modal-wide">
+    <h3 id="createKeyTitle">Create API Key</h3>
+
+    <!-- Step 1: label + notes -->
     <div id="createKeyForm">
       <div class="modal-field">
         <label>Label (shown as the source in logs)</label>
@@ -293,15 +292,36 @@
         <button class="btn btn-primary" id="createKeyConfirm" onclick="createApiKey()">Create</button>
       </div>
     </div>
+
+    <!-- Step 2: reveal token + connect snippets -->
     <div id="createKeyReveal" style="display:none">
-      <div class="modal-status" style="color:var(--orange);margin-bottom:12px;">
-        Copy this token now. It will not be shown again.
+      <div class="reveal-warning">
+        <i class="mdi mdi-shield-key-outline"></i>
+        <span>Copy this token now &mdash; for security, it won't be shown again.</span>
       </div>
-      <div class="token-reveal">
-        <code id="createKeyToken"></code>
-        <button class="btn" onclick="copyNewToken()" id="copyTokenBtn">Copy</button>
+      <div class="modal-field">
+        <label>Your new token</label>
+        <div class="token-reveal">
+          <code id="createKeyToken"></code>
+          <button class="btn" onclick="copyNewToken()" id="copyTokenBtn">Copy</button>
+        </div>
       </div>
-      <div class="modal-status" style="margin-top:12px;font-size:0.72rem;">
+
+      <div class="modal-field">
+        <label>Connect a client</label>
+        <div class="snippet-tabs" id="snippetTabs">
+          <div class="snippet-tab active" data-snippet="curl"><i class="mdi mdi-console"></i> curl</div>
+          <div class="snippet-tab" data-snippet="python"><i class="mdi mdi-language-python"></i> Python</div>
+          <div class="snippet-tab" data-snippet="openwebui"><i class="mdi mdi-application-brackets-outline"></i> OpenWebUI</div>
+          <div class="snippet-tab" data-snippet="claudecode"><i class="mdi mdi-robot-outline"></i> Claude Code</div>
+        </div>
+        <div class="snippet-body">
+          <button class="snippet-copy" onclick="copySnippet()" id="snippetCopyBtn">Copy</button>
+          <pre id="snippetContent"></pre>
+        </div>
+      </div>
+
+      <div class="modal-status" style="font-size:0.72rem;">
         Propagation to all Cloudflare edges takes up to ~60 seconds.
       </div>
       <div class="modal-actions">
