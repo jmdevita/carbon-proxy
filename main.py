@@ -60,6 +60,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Carbon Proxy", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def revalidate_dashboard_assets(request, call_next):
+    """Force the browser to revalidate dashboard assets every request.
+
+    StaticFiles + FileResponse already emit ETag and Last-Modified, so the
+    server returns 304 Not Modified (no body) when nothing has changed. The
+    missing piece without this header is that browsers fall back to heuristic
+    caching, which can serve stale JS for hours after a deploy.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/static/") or path == "/dashboard":
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 STATIC_DIR = Path(__file__).parent / "static"
 
 
