@@ -216,6 +216,28 @@
   </div>
 </div>
 
+<!-- API Keys -->
+<div class="section">
+  <div class="section-header" onclick="toggleSection('apiKeysSection')">
+    <div class="section-title">API Keys</div>
+    <div class="section-actions">
+      <button class="btn btn-primary" onclick="event.stopPropagation();openCreateKeyModal()" style="font-size:0.72rem;padding:4px 10px;">New Key</button>
+      <label style="font-size:0.72rem;color:var(--muted);display:flex;align-items:center;gap:4px;" onclick="event.stopPropagation()">
+        <input type="checkbox" id="apiKeyShowRevoked" onchange="loadApiKeys()"> show revoked
+      </label>
+      <div class="section-toggle" id="apiKeysSection-arrow">&#9660;</div>
+    </div>
+  </div>
+  <div class="section-content" id="apiKeysSection">
+    <div class="table-card"><div class="table-scroll">
+      <table>
+        <thead><tr><th>Label</th><th>Notes</th><th>Created</th><th>Last Used</th><th>Status</th><th></th></tr></thead>
+        <tbody id="apiKeysTb"><tr><td colspan="6" style="color:var(--muted);text-align:center;">--</td></tr></tbody>
+      </table>
+    </div></div>
+  </div>
+</div>
+
 </div>
 
 <!-- Offset Modal -->
@@ -248,6 +270,43 @@
         When enabled, the server checks once per day and purchases offsets up to the daily cap.
         Above the cap, purchases stop and a banner appears so you can offset manually.
       </p>
+    </div>
+  </div>
+</div>
+
+<!-- Create API Key Modal -->
+<div class="modal-overlay" id="createKeyModal" onclick="if(event.target===this)closeCreateKeyModal()">
+  <div class="modal">
+    <h3>Create API Key</h3>
+    <div id="createKeyForm">
+      <div class="modal-field">
+        <label>Label (shown as the source in logs)</label>
+        <input type="text" id="createKeyLabel" placeholder="e.g. claude-code, openwebui" maxlength="64">
+      </div>
+      <div class="modal-field">
+        <label>Notes (optional)</label>
+        <input type="text" id="createKeyNotes" placeholder="who or what uses this key" maxlength="255">
+      </div>
+      <div class="modal-status" id="createKeyStatus"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeCreateKeyModal()">Cancel</button>
+        <button class="btn btn-primary" id="createKeyConfirm" onclick="createApiKey()">Create</button>
+      </div>
+    </div>
+    <div id="createKeyReveal" style="display:none">
+      <div class="modal-status" style="color:var(--orange);margin-bottom:12px;">
+        Copy this token now. It will not be shown again.
+      </div>
+      <div class="token-reveal">
+        <code id="createKeyToken"></code>
+        <button class="btn" onclick="copyNewToken()" id="copyTokenBtn">Copy</button>
+      </div>
+      <div class="modal-status" style="margin-top:12px;font-size:0.72rem;">
+        Propagation to all Cloudflare edges takes up to ~60 seconds.
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" onclick="closeCreateKeyModal()">Done</button>
+      </div>
     </div>
   </div>
 </div>

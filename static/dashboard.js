@@ -609,6 +609,162 @@ function getOffsetKey() {
   return key ? key.trim() : null;
 }
 
+// -- API Keys management --
+let _apiKeyLabelsById = {};
+
+function fmtDate(iso) {
+  if (!iso) return '--';
+  const d = new Date(iso);
+  const today = new Date();
+  if (d.toDateString() === today.toDateString()) return fmtTime(iso);
+  return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
+}
+
+async function loadApiKeys() {
+  const showRevoked = document.getElementById('apiKeyShowRevoked').checked;
+  const tb = document.getElementById('apiKeysTb');
+  try {
+    const r = await fetch('/carbon/api_keys?include_revoked=' + showRevoked);
+    const keys = await r.json();
+    if (!keys.length) {
+      tb.innerHTML = '<tr><td colspan="6" style="color:var(--muted);text-align:center;">No keys yet. Click "New Key" to create one.</td></tr>';
+      return;
+    }
+    // Stash labels by id for the revoke confirm dialog so we don't have to
+    // interpolate user-controlled strings into an onclick attribute (esc()
+    // doesn't HTML-encode quotes, so labels with " could break the attribute).
+    _apiKeyLabelsById = {};
+    tb.innerHTML = keys.map(k => {
+      _apiKeyLabelsById[k.id] = k.label;
+      const revoked = !!k.revoked_at;
+      const badge = revoked
+        ? `<span class="badge-revoked">revoked</span>`
+        : `<span class="badge-active">active</span>`;
+      const action = revoked
+        ? ''
+        : `<button class="btn btn-danger" style="font-size:0.72rem;padding:3px 10px;" onclick="revokeApiKey(${k.id})">Revoke</button>`;
+      return `<tr>
+        <td>${esc(k.label)}</td>
+        <td style="color:var(--muted);">${esc(k.notes || '')}</td>
+        <td>${fmtDate(k.created_at)}</td>
+        <td>${fmtDate(k.last_used_at)}</td>
+        <td>${badge}</td>
+        <td style="text-align:right;">${action}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tb.innerHTML = '<tr><td colspan="6" style="color:var(--red);text-align:center;">Failed to load API keys.</td></tr>';
+  }
+}
+
+function openCreateKeyModal() {
+  document.getElementById('createKeyForm').style.display = '';
+  document.getElementById('createKeyReveal').style.display = 'none';
+  document.getElementById('createKeyLabel').value = '';
+  document.getElementById('createKeyNotes').value = '';
+  document.getElementById('createKeyStatus').textContent = '';
+  document.getElementById('createKeyStatus').style.color = '';
+  document.getElementById('createKeyConfirm').disabled = false;
+  document.getElementById('createKeyConfirm').textContent = 'Create';
+  document.getElementById('createKeyModal').classList.add('active');
+  document.getElementById('createKeyLabel').focus();
+}
+
+function closeCreateKeyModal() {
+  document.getElementById('createKeyModal').classList.remove('active');
+  // Wipe the plaintext token from the DOM -- it would otherwise sit there
+  // until the next create or a page refresh.
+  document.getElementById('createKeyToken').textContent = '';
+  loadApiKeys();  // refresh table in case a key was created
+}
+
+async function createApiKey() {
+  const label = document.getElementById('createKeyLabel').value.trim();
+  const notes = document.getElementById('createKeyNotes').value.trim();
+  const status = document.getElementById('createKeyStatus');
+  const btn = document.getElementById('createKeyConfirm');
+
+  if (!label) {
+    status.textContent = 'Label is required.';
+    status.style.color = 'var(--red)';
+    return;
+  }
+  const key = getOffsetKey();
+  if (!key) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Creating...';
+  status.textContent = '';
+  status.style.color = '';
+
+  try {
+    const r = await fetch('/carbon/api_keys', {
+      method: 'POST',
+      headers: {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'},
+      body: JSON.stringify({label, notes}),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      if (r.status === 401) localStorage.removeItem('offset_api_key');
+      status.textContent = d.detail || 'Failed to create key.';
+      status.style.color = 'var(--red)';
+      btn.disabled = false;
+      btn.textContent = 'Create';
+      return;
+    }
+    // Swap form for reveal
+    document.getElementById('createKeyForm').style.display = 'none';
+    document.getElementById('createKeyReveal').style.display = '';
+    document.getElementById('createKeyToken').textContent = d.token;
+  } catch (e) {
+    status.textContent = 'Network error.';
+    status.style.color = 'var(--red)';
+    btn.disabled = false;
+    btn.textContent = 'Create';
+  }
+}
+
+async function copyNewToken() {
+  const token = document.getElementById('createKeyToken').textContent;
+  const btn = document.getElementById('copyTokenBtn');
+  try {
+    await navigator.clipboard.writeText(token);
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  } catch (e) {
+    // Fallback: select the code block
+    const range = document.createRange();
+    range.selectNode(document.getElementById('createKeyToken'));
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+  }
+}
+
+async function revokeApiKey(id) {
+  const label = _apiKeyLabelsById[id] || 'this key';
+  if (!confirm(`Revoke API key "${label}"?\n\nIt will stop working at the Cloudflare edge within ~60 seconds.`)) return;
+  const key = getOffsetKey();
+  if (!key) return;
+
+  try {
+    const r = await fetch('/carbon/api_keys/' + id, {
+      method: 'DELETE',
+      headers: {'Authorization': 'Bearer ' + key},
+    });
+    if (!r.ok) {
+      if (r.status === 401) localStorage.removeItem('offset_api_key');
+      const d = await r.json().catch(() => ({}));
+      alert(d.detail || 'Failed to revoke key.');
+      return;
+    }
+    const d = await r.json();
+    if (d.warning) alert('Key revoked locally, but: ' + d.warning);
+    loadApiKeys();
+  } catch (e) {
+    alert('Network error revoking key.');
+  }
+}
+
 async function openOffsetModal() {
   const modal = document.getElementById('offsetModal');
   const input = document.getElementById('offsetAmount');
@@ -727,9 +883,11 @@ async function confirmOffset() {
 // -- Init --
 applyDailyViewUI();
 loadSources();
+loadApiKeys();
 refreshAll();
 setInterval(refreshAll, 3000);       // Data + power chart every 3s
 setInterval(loadSources, 60000);     // Refresh source list every minute
+setInterval(loadApiKeys, 30000);     // Refresh API keys (last_used_at) every 30s
 // Equivalents carousel: continuous auto-scroll with drag + wheel control
 (function setupCarousel() {
   const carousel = document.getElementById('equivCarousel');

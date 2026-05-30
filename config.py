@@ -55,6 +55,15 @@ class Settings(BaseSettings):
     auto_offset_check_interval_s: int = 86400  # once per day
     auto_offset_min_purchase_grams: int = 1000  # don't buy less than 1 kg at a time
 
+    # Cloudflare Workers KV (for edge-side API key validation by the worker)
+    # When all three are set, /carbon/api_keys/* endpoints sync token hashes to KV
+    # so the worker can validate bearer tokens at the edge without calling origin.
+    cloudflare_api_token: str = ""
+    cloudflare_account_id: str = ""
+    kv_namespace_id: str = ""
+    # How often the reconciler heals drift between local DB and KV (seconds).
+    kv_reconciler_interval_s: int = 300
+
     @field_validator("power_sample_hz")
     @classmethod
     def validate_sample_hz(cls, v):
@@ -73,6 +82,15 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def kv_is_configured() -> bool:
+    """True when all three Cloudflare KV settings are present."""
+    return bool(
+        settings.cloudflare_api_token
+        and settings.cloudflare_account_id
+        and settings.kv_namespace_id
+    )
 
 
 @functools.lru_cache(maxsize=1)

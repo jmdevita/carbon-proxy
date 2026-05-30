@@ -65,9 +65,20 @@ def init_db():
             value TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key_hash TEXT NOT NULL UNIQUE,
+            label TEXT NOT NULL,
+            notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            last_used_at TEXT,
+            revoked_at TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_requests_source ON requests(source);
         CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp);
         CREATE INDEX IF NOT EXISTS idx_requests_model ON requests(model);
+        CREATE INDEX IF NOT EXISTS idx_api_keys_revoked ON api_keys(revoked_at);
     """)
     # Idempotent migration: add is_auto column to offsets if missing
     cols = [r["name"] for r in conn.execute("PRAGMA table_info(offsets)").fetchall()]
@@ -333,6 +344,136 @@ def get_today_auto_spend_cents() -> int:
             "WHERE is_auto = 1 AND DATE(timestamp) = DATE('now')"
         ).fetchone()
         return int(row["total"])
+
+
+def api_key_create(key_hash: str, label: str, notes: str = "") -> int:
+    with _db_lock:
+        conn = _get_conn()
+        now = datetime.now(timezone.utc).isoformat()
+        cur = conn.execute(
+            "INSERT INTO api_keys (key_hash, label, notes, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (key_hash, label, notes, now),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def api_key_delete_local(key_hash: str):
+    """Hard delete a local row by hash. Used for rollback when KV write fails."""
+    with _db_lock:
+        conn = _get_conn()
+        conn.execute("DELETE FROM api_keys WHERE key_hash = ?", (key_hash,))
+        conn.commit()
+
+
+def api_key_list(include_revoked: bool = False) -> list[dict]:
+    with _db_lock:
+        conn = _get_conn()
+        where = "" if include_revoked else "WHERE revoked_at IS NULL"
+        rows = conn.execute(
+            f"SELECT id, key_hash, label, notes, created_at, last_used_at, revoked_at "
+            f"FROM api_keys {where} ORDER BY id DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def api_key_get(key_id: int) -> dict | None:
+    with _db_lock:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT * FROM api_keys WHERE id = ?", (key_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def api_key_revoke(key_id: int) -> dict | None:
+    """Set revoked_at on the row. Returns the row, or None if not found."""
+    with _db_lock:
+        conn = _get_conn()
+        now = datetime.now(timezone.utc).isoformat()
+        cur = conn.execute(
+            "UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+            (now, key_id),
+        )
+        if cur.rowcount == 0:
+            # Either missing or already revoked -- return current state regardless
+            row = conn.execute(
+                "SELECT * FROM api_keys WHERE id = ?", (key_id,)
+            ).fetchone()
+            conn.commit()
+            return dict(row) if row else None
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM api_keys WHERE id = ?", (key_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def api_key_update_label(key_id: int, label: str | None, notes: str | None) -> dict | None:
+    fields = []
+    params: list = []
+    if label is not None:
+        fields.append("label = ?")
+        params.append(label)
+    if notes is not None:
+        fields.append("notes = ?")
+        params.append(notes)
+    if not fields:
+        return api_key_get(key_id)
+    params.append(key_id)
+    with _db_lock:
+        conn = _get_conn()
+        conn.execute(
+            f"UPDATE api_keys SET {', '.join(fields)} WHERE id = ?", params
+        )
+        conn.commit()
+    return api_key_get(key_id)
+
+
+def api_key_lookup_active(key_hash: str) -> dict | None:
+    """Return the row for an active (non-revoked) hash, or None."""
+    with _db_lock:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT id, label FROM api_keys "
+            "WHERE key_hash = ? AND revoked_at IS NULL",
+            (key_hash,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def api_key_touch(key_hash: str):
+    """Update last_used_at for an active key. Silently no-ops if missing/revoked."""
+    with _db_lock:
+        conn = _get_conn()
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE api_keys SET last_used_at = ? "
+            "WHERE key_hash = ? AND revoked_at IS NULL",
+            (now, key_hash),
+        )
+        conn.commit()
+
+
+def api_key_active_map() -> dict[str, str]:
+    """All active keys as {hash: label} -- used by the reconciler."""
+    with _db_lock:
+        conn = _get_conn()
+        rows = conn.execute(
+            "SELECT key_hash, label FROM api_keys WHERE revoked_at IS NULL"
+        ).fetchall()
+        return {row["key_hash"]: row["label"] for row in rows}
+
+
+def api_key_revoked_hashes() -> set[str]:
+    """Hashes of revoked keys -- reconciler ensures these are absent from KV."""
+    with _db_lock:
+        conn = _get_conn()
+        rows = conn.execute(
+            "SELECT key_hash FROM api_keys WHERE revoked_at IS NOT NULL"
+        ).fetchall()
+        return {row["key_hash"] for row in rows}
 
 
 def close_db():

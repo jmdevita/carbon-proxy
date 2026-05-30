@@ -14,11 +14,13 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import settings
+from config import settings, kv_is_configured
 from core.proxy import router as proxy_router, init_client, close_client
 from api.reporting import router as reporting_router
+from api.api_keys import router as api_keys_router, reconciler_loop as kv_reconciler_loop
 import db
 from api import trmnl, auto_offset
+from integrations import cloudflare_kv
 from energy.power import monitor as power_monitor
 
 
@@ -27,6 +29,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting carbon-proxy, upstream=%s", settings.upstream_url)
     db.init_db()
     init_client()
+    cloudflare_kv.init_client()
     power_monitor.start()
 
     trmnl_task = None
@@ -36,13 +39,20 @@ async def lifespan(app: FastAPI):
 
     auto_offset_task = asyncio.create_task(auto_offset.push_loop())
 
+    kv_reconciler_task = None
+    if kv_is_configured():
+        kv_reconciler_task = asyncio.create_task(kv_reconciler_loop())
+
     yield
 
     if trmnl_task:
         trmnl_task.cancel()
+    if kv_reconciler_task:
+        kv_reconciler_task.cancel()
     auto_offset_task.cancel()
     power_monitor.stop()
     await close_client()
+    await cloudflare_kv.close_client()
     db.close_db()
     logger.info("Carbon proxy shut down")
 
@@ -72,8 +82,9 @@ async def dashboard():
 # Serve static assets (favicon, etc.)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# Mount reporting routes before proxy so /carbon/* takes priority
+# Mount reporting + api_keys routes before proxy so /carbon/* takes priority
 app.include_router(reporting_router)
+app.include_router(api_keys_router)
 
 # Mount proxy routes last (catch-all)
 app.include_router(proxy_router)

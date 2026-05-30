@@ -133,6 +133,52 @@ header {
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .modal-status { font-size: 0.78rem; color: var(--muted); margin-bottom: 12px; }
 
+/* Token reveal (shown once after API key create) */
+.token-reveal {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.token-reveal code {
+  flex: 1;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  color: var(--primary);
+  word-break: break-all;
+  user-select: all;
+  line-height: 1.4;
+}
+.token-reveal .btn { white-space: nowrap; }
+
+/* API keys: revoke button + status badges */
+.btn-danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+.btn-danger:hover {
+  background: var(--red-dim);
+  border-color: var(--red);
+  color: var(--red);
+}
+.badge-revoked {
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--red-dim);
+  color: var(--red);
+}
+.badge-active {
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--primary-dim);
+  color: var(--primary);
+}
+
 /* Filter bar */
 .filter-bar {
   display: flex;
