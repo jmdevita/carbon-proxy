@@ -47,18 +47,22 @@ auth mechanisms, and conflating them is the easiest way to leave a gap.
 
 | Route | Auth at origin | Worker adds auth? | CF Access adds auth? |
 |---|---|---|---|
-| `POST /v1/...` (proxy catch-all) | **`X-Worker-Origin-Secret` header**, when `WORKER_ORIGIN_SECRET` is set | Yes (bearer ↔ KV) | n/a (worker fronts this) |
+| `POST /v1/...` (proxy catch-all) | **`X-Worker-Origin-Secret` header**, checked only when `CF-Connecting-IP` is present (cloudflared sets it on every forwarded request) | Yes (bearer ↔ KV) | n/a (worker fronts this) |
 | `GET /dashboard`, `GET /carbon/*` reporting | **none** | n/a (not fronted) | **Yes, only if you set it up** |
 | `POST/PATCH/DELETE /carbon/api_keys/*`, `POST /carbon/offset`, `POST /carbon/auto_offset/toggle` | `OFFSET_API_KEY` bearer, always | n/a | Yes, if set up |
 
 Three things follow from this:
 
-1. **The proxy catch-all is gated by a shared secret with the worker.** The
-   worker stamps every forwarded request with `X-Worker-Origin-Secret`;
-   origin rejects any catch-all request missing or mismatching it. This
+1. **The proxy catch-all is gated by a shared secret with the worker, for
+   Cloudflare-fronted traffic only.** The worker stamps every forwarded
+   request with `X-Worker-Origin-Secret`; the origin rejects any
+   Cloudflare-fronted catch-all request missing or mismatching it. This
    closes the "direct curl to the tunnel hostname for free inference"
-   bypass. If `WORKER_ORIGIN_SECRET` is left empty (e.g. local dev), the
-   check is skipped — the catch-all becomes open again.
+   bypass. The check is gated on the `CF-Connecting-IP` header (cloudflared
+   sets it on every forwarded request) so internal Docker callers — e.g. an
+   OpenWebUI container pointed at `http://carbon-proxy:8080/v1` — are not
+   blocked. If `WORKER_ORIGIN_SECRET` is left empty (e.g. local dev), the
+   check is skipped entirely.
 2. **The dashboard is open by default.** Without Cloudflare Access in
    front, anyone who can reach the dashboard hostname can read all labels,
    request logs, and source breakdowns. They can't *mutate* anything
@@ -101,7 +105,7 @@ In the Cloudflare dashboard:
 1. **Workers & Pages** → **KV** → **Create a namespace**
 2. Name it `carbon-proxy-api-keys`
 3. Copy the **Namespace ID** (looks like `a1b2c3...`) — you'll use it twice:
-   once in the origin `.env` and once in `wrangler.toml`
+   once in the origin `.env` and once in `wrangler.jsonc`
 
 ## 2. Create an API token for the origin
 
@@ -150,120 +154,157 @@ Restart the carbon-proxy container. You should see this in the logs:
 If KV isn't configured the reconciler logs `KV not configured -- reconciler
 disabled.` and the `POST /carbon/api_keys` endpoint returns 503.
 
-## 4. Write the worker
+## 4. The worker source
 
-Create a new directory (e.g. `carbon-proxy-auth/`) with this `src/worker.js`:
+The worker ships at `carbon-proxy/worker/src/worker.js`. The full file is
+~50 lines; the shape of it:
 
 ```javascript
-async function sha256Hex(s) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
-  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
-}
-
-function unauthorized() {
-  return new Response(JSON.stringify({ error: "Unauthorized" }), {
-    status: 401,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
 export default {
   async fetch(request, env) {
-    const auth = request.headers.get("Authorization") || "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : null;
-    if (!token) return unauthorized();
-
-    // KV stores sha256(token) → label. The worker hashes incoming bearers so
-    // KV never holds plaintext (defense-in-depth against a KV dump leak).
-    const hash = await sha256Hex(token);
-    const label = await env.API_KEYS.get(hash, { cacheTtl: 60 });
-    if (!label) return unauthorized();
-
-    // Forward to origin: strip Authorization, set X-Carbon-Source, and
-    // prove this came through the worker (so direct-origin curls 401).
-    const fwd = new Request(
-      request.url.replace(env.PUBLIC_HOST, env.ORIGIN_HOST),
-      request
-    );
-    fwd.headers.delete("Authorization");
-    fwd.headers.set("X-Carbon-Source", label);
-    if (env.ORIGIN_SECRET) {
-      fwd.headers.set("X-Worker-Origin-Secret", env.ORIGIN_SECRET);
-    }
-    return fetch(fwd);
+    // 1. Pull bearer from Authorization header → 401 if missing
+    // 2. sha256(bearer) → KV lookup → 401 if no hit
+    // 3. Strip Authorization, set X-Carbon-Source: <label>
+    // 4. If env.ORIGIN_SECRET set, set X-Worker-Origin-Secret
+    // 5. Rewrite hostname (PUBLIC_HOST → ORIGIN_HOST) and forward
   },
 };
 ```
 
-Notes:
+Read `worker/src/worker.js` for the actual implementation. Things worth
+noting about the design:
 
-- `cacheTtl: 60` is the per-edge read cache. Lower means faster revocation
-  globally at the cost of more KV reads; 60 seconds is a good default.
-- The hostname rewrite is the only place the worker knows about your
-  topology. Both hostnames are passed as `vars` in `wrangler.jsonc` below.
-- `ORIGIN_SECRET` is a wrangler **secret** (not in `vars`), set via
+- **KV stores `sha256(token) → label` — never plaintext.** Defense in depth
+  against a KV dump or compromised CF account: an attacker who reads KV
+  still can't replay the tokens. Origin (`db.api_keys.token_hash`) also
+  only stores the hash; plaintext exists in memory for one request during
+  creation, then in the user's clipboard.
+- **`cacheTtl: 60`** is the per-edge KV read cache. Lower = faster
+  revocation across the global edge at the cost of more KV reads. 60s is
+  the floor.
+- **`ORIGIN_SECRET`** is a wrangler **secret** (not in `vars`), set via
   `wrangler secret put ORIGIN_SECRET`. The same value goes in the origin's
   `.env` as `WORKER_ORIGIN_SECRET`. The `if (env.ORIGIN_SECRET)` guard
-  keeps the worker working even before you provision the secret.
+  keeps the worker functional before you provision the secret.
+- **Hostname rewrite** is the only place the worker encodes your topology.
+  Both hostnames live in `wrangler.jsonc` `vars` so the worker file stays
+  generic.
 
 ## 5. Configure wrangler
 
-Create `wrangler.toml`:
+The repo ships `wrangler.example.jsonc` with the right shape. After
+`cp wrangler.example.jsonc wrangler.jsonc` (step 0), fill in:
 
-```toml
-name = "carbon-proxy-auth"
-main = "src/worker.js"
-compatibility_date = "2025-01-01"
+```jsonc
+{
+  "name": "carbon-proxy-auth",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-05-30",
 
-[vars]
-PUBLIC_HOST = "api-keys.yourdomain.com"
-ORIGIN_HOST = "api.yourdomain.com"
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
 
-[[kv_namespaces]]
-binding = "API_KEYS"             # must match env.API_KEYS in worker.js
-id      = "<KV_NAMESPACE_ID>"    # from step 1
+  "vars": {
+    "PUBLIC_HOST": "api.yourdomain.com",       // where clients connect
+    "ORIGIN_HOST": "carbon.yourdomain.com"     // tunnel exit → carbon-proxy
+  },
+
+  "kv_namespaces": [
+    { "binding": "API_KEYS", "id": "<KV_NAMESPACE_ID>" }  // from step 1
+  ],
+
+  "routes": [
+    { "pattern": "api.yourdomain.com", "custom_domain": true }
+  ]
+}
 ```
+
+The `routes[].custom_domain: true` form is the easiest path — Cloudflare
+auto-creates the DNS record and provisions a TLS cert on first deploy.
+The hostname must be on a Cloudflare-managed zone.
 
 Deploy:
 
 ```bash
-wrangler login
-wrangler deploy
+cd carbon-proxy/worker
+npx wrangler secret put ORIGIN_SECRET   # paste the WORKER_ORIGIN_SECRET value
+npx wrangler deploy
 ```
 
 ## 6. Route traffic through the worker
 
-You have two reasonable options.
+The `routes` block in `wrangler.jsonc` (step 5) handles this declaratively.
+Two reasonable shapes:
 
-### Option A: Worker route on a separate hostname (recommended)
+### Option A: Custom domain on a dedicated public hostname (recommended)
 
-The worker lives at `api-keys.yourdomain.com`, the tunneled origin at
-`api.yourdomain.com`. Clients talk to `api-keys.*`; only the worker talks to
-`api.*`.
-
-In the CF dashboard:
-
-1. **Workers & Pages** → your worker → **Settings** → **Triggers** →
-   **Add Custom Domain**: `api-keys.yourdomain.com`
-2. CF creates the DNS record automatically
-
-This keeps the public LLM API and the tunneled origin on distinct hostnames,
-which is easier to reason about than "same hostname, worker selectively
-forwards."
-
-### Option B: Worker route on the same hostname
-
-If you prefer a single hostname, add a `[[routes]]` section to
-`wrangler.toml`:
-
-```toml
-[[routes]]
-pattern = "api.yourdomain.com/v1/*"
-zone_name = "yourdomain.com"
+```jsonc
+"routes": [
+  { "pattern": "api.yourdomain.com", "custom_domain": true }
+]
 ```
 
-The worker now intercepts only `/v1/*`; the dashboard and `/carbon/*` go
-straight to origin via tunnel. Worker code stays the same.
+Clients talk to `api.yourdomain.com` (worker); the worker forwards to
+`carbon.yourdomain.com` (tunnel exit). This is the setup the example
+config ships with. Distinct hostnames keep the LLM API and the tunneled
+dashboard easy to reason about, and CF Access on `carbon.*` doesn't
+interfere with API traffic.
+
+### Option B: Route on the same hostname, path-scoped
+
+If you'd rather have a single hostname:
+
+```jsonc
+"routes": [
+  { "pattern": "api.yourdomain.com/v1/*", "zone_name": "yourdomain.com" }
+]
+```
+
+Worker intercepts only `/v1/*`; the dashboard and `/carbon/*` reach origin
+directly via tunnel. Worker code is identical either way.
+
+## 6.5. Whitelist the API for OpenAI-style SDK clients (WAF skip rule)
+
+Cloudflare's WAF Managed Rules pattern-match on User-Agent strings like
+`OpenAI/Python <version>` and return a 403 "Your request was blocked"
+page before the request reaches the worker. Without an exception, every
+caller using the official OpenAI Python or JS SDK will be edge-blocked
+even with a valid bearer.
+
+Bearer-vs-KV auth at the worker is already the meaningful gate for
+`/v1/*`, so it's safe to skip the managed checks on that path.
+
+**Add a custom WAF rule** in **Security → Security rules → Custom rules**:
+
+- **Name**: `Skip WAF for /v1/* API clients`
+- **Expression**:
+  ```
+  (http.host eq "api.yourdomain.com" and starts_with(http.request.uri.path, "/v1/"))
+  ```
+- **Action**: Skip
+  - All managed rules
+  - All Super Bot Fight Mode rules (if on Pro+)
+  - Browser Integrity Check (under "Skip products")
+- **Place at**: top of the list
+
+This is path-scoped to `/v1/*` only — `carbon.yourdomain.com/dashboard`
+and `/carbon/*` still get full WAF + Bot protection, gated by CF Access.
+
+Bot Fight Mode (Free plan) **cannot** be skipped by custom rules. If
+you're on Free and Bot Fight Mode is enabled, you'll need to disable it
+zone-wide; the worker's bearer check is doing the real gating anyway.
+
+Verify after deploy with a Stainless UA — should reach the worker and
+401 on a fake token (instead of 403'ing at the edge):
+
+```bash
+curl -sS -D - -o /dev/null -X POST https://api.yourdomain.com/v1/chat/completions \
+  -H "Authorization: Bearer fake" \
+  -H "Content-Type: application/json" \
+  -H "User-Agent: OpenAI/Python 1.50.0" \
+  -d '{"model":"x","messages":[{"role":"user","content":"hi"}]}' \
+  | grep -iE "^HTTP|^content-type"
+# expected: HTTP/2 401  +  content-type: application/json
+```
 
 ## 7. Lock down the dashboard with Cloudflare Access
 
@@ -297,7 +338,7 @@ required for v1.
 4. From a terminal:
 
    ```bash
-   curl https://api-keys.yourdomain.com/v1/models \
+   curl https://api.yourdomain.com/v1/models \
      -H "Authorization: Bearer ckp_..."
    ```
 
@@ -372,10 +413,21 @@ list and both log requests under the shared label.
 
 ### Direct-origin requests
 
-If `WORKER_ORIGIN_SECRET` is set on the origin, direct hits to the catch-all
-(`/v1/*` and anything else not explicitly handled) return 401 unless they
-include `X-Worker-Origin-Secret: <secret>`. For debugging from inside the
-tunnel network, supply both headers manually:
+If `WORKER_ORIGIN_SECRET` is set on the origin, **Cloudflare-fronted**
+direct hits to the catch-all (`/v1/*` and anything else not explicitly
+handled) return 401 unless they include `X-Worker-Origin-Secret: <secret>`.
+"Cloudflare-fronted" is detected by the presence of the `CF-Connecting-IP`
+header, which cloudflared injects on every forwarded request.
+
+This carve-out matters in practice: internal Docker callers — an
+OpenWebUI container pointed at `http://carbon-proxy:8080/v1`, or any
+host on the same LAN/Docker network reaching the origin directly — don't
+carry `CF-Connecting-IP`, so the worker-secret check is skipped for
+them. Bearer-vs-DB auth still runs via `identify()`. The LAN is treated
+as trusted.
+
+For debugging from outside the tunnel (through Cloudflare), supply both
+headers manually:
 
 ```bash
 curl https://carbon.yourdomain.com/v1/models \
