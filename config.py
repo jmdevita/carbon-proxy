@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     # worker's bearer check. Leave empty to disable (e.g. for local dev).
     worker_origin_secret: str = ""
 
+    # IANA timezone used to bucket daily reports (dashboard charts, auto-offset
+    # daily cap rollover). Storage stays UTC; this only controls presentation.
+    report_timezone: str = "America/New_York"
+
     # Public base URL clients should use to call this API (e.g.
     # "https://api.devita.dev"). The dashboard embeds this into the snippets
     # shown on key creation so users can copy-paste a working curl/Python/etc.

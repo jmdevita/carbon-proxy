@@ -2,9 +2,25 @@ import sqlite3
 import asyncio
 import threading
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from config import settings
+
+
+def _report_tz() -> ZoneInfo:
+    return ZoneInfo(settings.report_timezone)
+
+
+def _parse_utc(ts: str) -> datetime:
+    dt = datetime.fromisoformat(ts)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _local_date(ts: str) -> str:
+    return _parse_utc(ts).astimezone(_report_tz()).date().isoformat()
 
 logger = logging.getLogger("carbon-proxy.db")
 
@@ -229,19 +245,32 @@ def get_daily_breakdown(
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         query = f"""
-            SELECT
-                DATE(timestamp) as date,
-                source,
-                COUNT(*) as requests,
-                SUM(tokens_in + tokens_out) as total_tokens,
-                SUM(energy_joules) / 3600000.0 as energy_kwh,
-                SUM(co2_grams) / 1000.0 as co2_kg
+            SELECT timestamp, source,
+                   COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0) AS tokens,
+                   COALESCE(energy_joules, 0) AS energy_joules,
+                   COALESCE(co2_grams, 0) AS co2_grams
             FROM requests {where}
-            GROUP BY DATE(timestamp), source
-            ORDER BY date DESC
         """
         rows = conn.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
+
+    buckets: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        date_str = _local_date(r["timestamp"])
+        src = r["source"]
+        b = buckets.setdefault((date_str, src), {
+            "date": date_str,
+            "source": src,
+            "requests": 0,
+            "total_tokens": 0,
+            "energy_kwh": 0.0,
+            "co2_kg": 0.0,
+        })
+        b["requests"] += 1
+        b["total_tokens"] += r["tokens"]
+        b["energy_kwh"] += r["energy_joules"] / 3600000.0
+        b["co2_kg"] += r["co2_grams"] / 1000.0
+
+    return sorted(buckets.values(), key=lambda x: x["date"], reverse=True)
 
 
 def log_offset(
@@ -337,11 +366,16 @@ def set_kv(key: str, value: str):
 
 
 def get_today_auto_spend_cents() -> int:
+    tz = _report_tz()
+    start_local = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    start_utc = start_local.astimezone(timezone.utc).isoformat()
+    end_utc = (start_local + timedelta(days=1)).astimezone(timezone.utc).isoformat()
     with _db_lock:
         conn = _get_conn()
         row = conn.execute(
             "SELECT COALESCE(SUM(cost_cents), 0) AS total FROM offsets "
-            "WHERE is_auto = 1 AND DATE(timestamp) = DATE('now')"
+            "WHERE is_auto = 1 AND timestamp >= ? AND timestamp < ?",
+            (start_utc, end_utc),
         ).fetchone()
         return int(row["total"])
 
@@ -497,33 +531,34 @@ def api_key_stats(label: str, since_iso: str, recent_limit: int = 10) -> dict:
         ).fetchone()
         totals = dict(totals_row)
 
-        # Daily counts since the window start. The frontend pads to 7 days so
-        # the sparkline always has the same x-axis even when days are empty.
-        daily_rows = conn.execute(
+        # Pull raw rows; bucket by report-tz date in Python so day boundaries
+        # match the dashboard's displayed timezone rather than UTC.
+        daily_raw = conn.execute(
             """
-            SELECT
-                DATE(timestamp) AS date,
-                COUNT(*) AS requests,
-                COALESCE(SUM(co2_grams), 0) AS co2_grams
+            SELECT timestamp, COALESCE(co2_grams, 0) AS co2_grams
             FROM requests
             WHERE source = ? AND timestamp >= ?
-            GROUP BY DATE(timestamp)
-            ORDER BY date ASC
             """,
             (label, since_iso),
         ).fetchall()
-        daily_by_date = {r["date"]: dict(r) for r in daily_rows}
 
-        # Pad to exactly 7 days ending today (UTC). Keeps sparkline shape
-        # stable regardless of activity. Use UTC explicitly so a non-UTC
-        # container TZ can't drift the bucket boundaries.
-        from datetime import timedelta
-        today = datetime.now(timezone.utc).date()
+        tz = _report_tz()
+        daily_by_date: dict[str, dict] = {}
+        for r in daily_raw:
+            d = _parse_utc(r["timestamp"]).astimezone(tz).date().isoformat()
+            b = daily_by_date.setdefault(d, {"date": d, "requests": 0, "co2_grams": 0.0})
+            b["requests"] += 1
+            b["co2_grams"] += r["co2_grams"]
+
+        # Pad to exactly 7 days ending today in the report timezone so the
+        # sparkline has a stable x-axis.
+        today = datetime.now(tz).date()
         daily_series = []
         for i in range(6, -1, -1):
             d = (today - timedelta(days=i)).isoformat()
-            row = daily_by_date.get(d, {"date": d, "requests": 0, "co2_grams": 0.0})
-            daily_series.append(row)
+            daily_series.append(
+                daily_by_date.get(d, {"date": d, "requests": 0, "co2_grams": 0.0})
+            )
 
         primary_row = conn.execute(
             """
