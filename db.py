@@ -100,6 +100,11 @@ def init_db():
     cols = [r["name"] for r in conn.execute("PRAGMA table_info(offsets)").fetchall()]
     if "is_auto" not in cols:
         conn.execute("ALTER TABLE offsets ADD COLUMN is_auto INTEGER NOT NULL DEFAULT 0")
+    # Idempotent migration: add cached_tokens column to requests if missing.
+    # Tracks KV-cache prefix hits; excluded from tokens_in (which is fresh-only).
+    req_cols = [r["name"] for r in conn.execute("PRAGMA table_info(requests)").fetchall()]
+    if "cached_tokens" not in req_cols:
+        conn.execute("ALTER TABLE requests ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     logger.info("Database initialized at %s", settings.sqlite_path)
 
@@ -113,6 +118,7 @@ def log_request(
     energy_joules: float = 0.0,
     co2_grams: float = 0.0,
     power_source: str = "none",
+    cached_tokens: int = 0,
 ):
     with _db_lock:
         conn = _get_conn()
@@ -120,10 +126,10 @@ def log_request(
         conn.execute(
             """INSERT INTO requests
                (timestamp, source, model, tokens_in, tokens_out, duration_ms,
-                energy_joules, co2_grams, power_source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                energy_joules, co2_grams, power_source, cached_tokens)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (now, source, model, tokens_in, tokens_out, duration_ms,
-             energy_joules, co2_grams, power_source),
+             energy_joules, co2_grams, power_source, cached_tokens),
         )
         conn.commit()
 
@@ -137,10 +143,11 @@ async def log_request_async(
     energy_joules: float = 0.0,
     co2_grams: float = 0.0,
     power_source: str = "none",
+    cached_tokens: int = 0,
 ):
     await asyncio.to_thread(
         log_request, source, model, tokens_in, tokens_out,
-        duration_ms, energy_joules, co2_grams, power_source,
+        duration_ms, energy_joules, co2_grams, power_source, cached_tokens,
     )
 
 

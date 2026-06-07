@@ -19,10 +19,12 @@ logger = logging.getLogger("carbon-proxy.proxy")
 router = APIRouter()
 
 
-def _extract_tokens(data: dict) -> tuple[int, int]:
+def _extract_tokens(data: dict) -> tuple[int, int, int]:
     """Extract token counts from response data, supporting all backend formats.
 
-    Checks usage dict (OpenAI/Anthropic) and top-level fields (Ollama/llama.cpp native).
+    Returns (fresh_prompt_tokens, completion_tokens, cached_prompt_tokens).
+    Cached tokens are subtracted from fresh — they're KV-cache prefix hits with
+    near-zero compute, tracked separately for visibility but excluded from totals.
     """
     usage = data.get("usage", {})
 
@@ -40,7 +42,12 @@ def _extract_tokens(data: dict) -> tuple[int, int]:
         or data.get("tokens_predicted")    # llama.cpp /completion
         or 0
     )
-    return int(tokens_in), int(tokens_out)
+    # `or {}` guards against explicit null (some upstreams send
+    # "prompt_tokens_details": null, where .get(default) wouldn't kick in).
+    details = usage.get("prompt_tokens_details") or {}
+    cached_tokens = int(details.get("cached_tokens") or 0)
+    fresh_tokens_in = max(0, int(tokens_in) - cached_tokens)
+    return fresh_tokens_in, int(tokens_out), cached_tokens
 
 # Shared httpx client, initialized in main.py lifespan
 http_client: httpx.AsyncClient = None
@@ -176,11 +183,12 @@ async def _handle_non_streaming(
 
     tokens_in = 0
     tokens_out = 0
+    cached_tokens = 0
     content_type = resp.headers.get("content-type", "")
     if "json" in content_type or "text" in content_type:
         try:
             data = json.loads(body)
-            tokens_in, tokens_out = _extract_tokens(data)
+            tokens_in, tokens_out, cached_tokens = _extract_tokens(data)
         except Exception:
             pass  # Non-JSON or no usage data -- that's fine
 
@@ -191,6 +199,7 @@ async def _handle_non_streaming(
     await _log_request(
         source, model, tokens_in, tokens_out, duration_ms,
         energy.energy_joules, co2_grams, energy.power_source,
+        cached_tokens=cached_tokens,
     )
 
     return Response(
@@ -244,12 +253,13 @@ async def _handle_streaming(
         duration_ms = int((time.monotonic() - start_time) * 1000)
         tokens_in = 0
         tokens_out = 0
+        cached_tokens = 0
 
         last_data_line = stream_state["last_data_line"]
         if last_data_line:
             try:
                 data = json.loads(last_data_line[6:])  # Strip "data: " prefix
-                tokens_in, tokens_out = _extract_tokens(data)
+                tokens_in, tokens_out, cached_tokens = _extract_tokens(data)
             except (json.JSONDecodeError, KeyError) as e:
                 logger.warning("Failed to extract usage from streaming response: %s", e)
 
@@ -263,6 +273,7 @@ async def _handle_streaming(
         await _log_request(
             source, model, tokens_in, tokens_out, duration_ms,
             energy.energy_joules, co2_grams, energy.power_source,
+            cached_tokens=cached_tokens,
         )
 
     return StreamingResponse(
@@ -282,10 +293,11 @@ async def _log_request(
     energy_joules: float = 0.0,
     co2_grams: float = 0.0,
     power_source: str = "none",
+    cached_tokens: int = 0,
 ):
     logger.info(
-        "request source=%s model=%s tokens_in=%d tokens_out=%d duration_ms=%d energy=%.2fJ co2=%.4fg power=%s",
-        source, model, tokens_in, tokens_out, duration_ms, energy_joules, co2_grams, power_source,
+        "request source=%s model=%s tokens_in=%d tokens_out=%d cached=%d duration_ms=%d energy=%.2fJ co2=%.4fg power=%s",
+        source, model, tokens_in, tokens_out, cached_tokens, duration_ms, energy_joules, co2_grams, power_source,
     )
     await db.log_request_async(
         source=source,
@@ -296,4 +308,5 @@ async def _log_request(
         energy_joules=energy_joules,
         co2_grams=co2_grams,
         power_source=power_source,
+        cached_tokens=cached_tokens,
     )
