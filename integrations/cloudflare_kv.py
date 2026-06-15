@@ -5,10 +5,13 @@ This module is how the origin pushes / removes / lists entries from outside CF.
 
 Keys are SHA-256 hashes of the plaintext bearer token (never the plaintext).
 Values are the human-readable label, sent to the origin as X-Carbon-Source.
+The same label is also stored in KV metadata so the reconciler can detect
+drift from a single list call without paying per-key reads.
 
 KV consistency: writes propagate to all edges in ~60s; reads cache up to ~60s.
 Practical effect: revocation is best-effort within ~1 minute globally.
 """
+import json
 import logging
 
 import httpx
@@ -54,14 +57,23 @@ def _require_client() -> httpx.AsyncClient:
     return _client
 
 
-async def put(key: str, value: str) -> None:
-    """Write a single key. Raises on non-2xx."""
+async def put(key: str, value: str, metadata: dict | None = None) -> None:
+    """Write a single key. Raises on non-2xx.
+
+    When `metadata` is provided, uses multipart/form-data so KV stores it
+    alongside the value. The reconciler reads metadata from list responses
+    to detect drift without per-key reads.
+    """
     client = _require_client()
-    r = await client.put(
-        f"{_base_url()}/values/{key}",
-        headers=_headers(),
-        content=value.encode("utf-8"),
-    )
+    url = f"{_base_url()}/values/{key}"
+    if metadata is None:
+        r = await client.put(url, headers=_headers(), content=value.encode("utf-8"))
+    else:
+        files = {
+            "value": ("value", value.encode("utf-8"), "application/octet-stream"),
+            "metadata": ("metadata", json.dumps(metadata).encode("utf-8"), "application/json"),
+        }
+        r = await client.put(url, headers=_headers(), files=files)
     r.raise_for_status()
 
 
@@ -74,10 +86,15 @@ async def delete(key: str) -> None:
     r.raise_for_status()
 
 
-async def list_keys() -> set[str]:
-    """Enumerate all keys in the namespace (paginated). Used by the reconciler."""
+async def list_entries() -> dict[str, str | None]:
+    """Enumerate all keys with their stored label (paginated).
+
+    Returns {key_hash: label_in_kv}. `label_in_kv` is None for entries
+    written before metadata was introduced; the reconciler treats those
+    as drift and re-PUTs them once.
+    """
     client = _require_client()
-    keys: set[str] = set()
+    entries: dict[str, str | None] = {}
     cursor: str | None = None
     while True:
         params = {"limit": 1000}
@@ -89,8 +106,10 @@ async def list_keys() -> set[str]:
         r.raise_for_status()
         data = r.json()
         for entry in data.get("result", []):
-            keys.add(entry["name"])
+            meta = entry.get("metadata") or {}
+            label = meta.get("label") if isinstance(meta, dict) else None
+            entries[entry["name"]] = label
         cursor = (data.get("result_info") or {}).get("cursor") or None
         if not cursor:
             break
-    return keys
+    return entries

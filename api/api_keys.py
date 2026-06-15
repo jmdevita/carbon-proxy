@@ -112,7 +112,7 @@ async def create_key(
     # Push to KV. If this fails, roll back the local row so the user doesn't
     # walk away with a token that will 401 at the edge.
     try:
-        await cloudflare_kv.put(key_hash, label)
+        await cloudflare_kv.put(key_hash, label, metadata={"label": label})
     except Exception as e:
         await asyncio.to_thread(db.api_key_delete_local, key_hash)
         logger.error("KV write failed during create, rolled back local row: %s", e)
@@ -174,7 +174,9 @@ async def update_key(
         and kv_is_configured()
     ):
         try:
-            await cloudflare_kv.put(before["key_hash"], clean_label)
+            await cloudflare_kv.put(
+                before["key_hash"], clean_label, metadata={"label": clean_label}
+            )
         except Exception as e:
             # Drift: log and let the reconciler heal it next tick.
             logger.warning(
@@ -216,29 +218,35 @@ async def revoke_key(key_id: int, request: Request):
 async def reconcile_once() -> dict:
     """Heal drift between local DB and KV.
 
-    - PUT every active key (idempotent; heals both missing keys and stale
-      labels left behind by a failed PATCH).
-    - DELETE any KV key not active locally (covers revoked keys and orphans).
+    - PUT any active key whose KV label is missing or stale.
+    - DELETE any KV key not active locally.
+
+    Drift detection is done by comparing local labels to the label stored
+    in KV metadata, which `list_entries()` returns alongside each key. In
+    steady state this loop performs one list and zero writes per tick,
+    independent of how many active keys exist.
     """
     async with _reconcile_lock:
         if not kv_is_configured():
             return {"skipped": "kv not configured"}
 
         active_map = await asyncio.to_thread(db.api_key_active_map)
-        kv_keys = await cloudflare_kv.list_keys()
+        kv_entries = await cloudflare_kv.list_entries()
 
         active_hashes = set(active_map.keys())
-        missing_from_kv = active_hashes - kv_keys
-        orphan_in_kv = kv_keys - active_hashes
+        kv_hashes = set(kv_entries.keys())
+        missing_from_kv = active_hashes - kv_hashes
+        orphan_in_kv = kv_hashes - active_hashes
+        stale_labels = {
+            h for h in active_hashes & kv_hashes
+            if kv_entries[h] != active_map[h]
+        }
 
-        # Always PUT every active key. This is the only way to detect label
-        # drift (PATCH wrote locally but KV PUT failed) without an extra read.
-        # KV writes are cheap; at the scales this dashboard targets (dozens
-        # of keys, every 5 min), the cost is negligible.
         pushed = 0
-        for h, label in active_map.items():
+        for h in missing_from_kv | stale_labels:
+            label = active_map[h]
             try:
-                await cloudflare_kv.put(h, label)
+                await cloudflare_kv.put(h, label, metadata={"label": label})
                 pushed += 1
             except Exception as e:
                 logger.warning("Reconciler put failed for %s: %s", h[:8], e)
@@ -251,12 +259,13 @@ async def reconcile_once() -> dict:
 
         result = {
             "active_local": len(active_hashes),
-            "kv_keys": len(kv_keys),
+            "kv_keys": len(kv_hashes),
             "pushed_to_kv": pushed,
             "added_to_kv": len(missing_from_kv),
+            "stale_labels_fixed": len(stale_labels),
             "removed_from_kv": len(orphan_in_kv),
         }
-        if missing_from_kv or orphan_in_kv:
+        if missing_from_kv or orphan_in_kv or stale_labels:
             logger.info("Reconciler healed drift: %s", result)
         return result
 
