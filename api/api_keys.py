@@ -30,7 +30,18 @@ logger = logging.getLogger("carbon-proxy.api_keys")
 
 router = APIRouter(prefix="/carbon/api_keys", tags=["api_keys"])
 
-# Serializes reconciler ticks so a manual run can't race the background loop.
+# Serializes all DB+KV write paths against reconciler ticks. Held by the
+# reconciler for the duration of a tick and by POST/PATCH/DELETE around their
+# DB write + KV mirror call -- the writer is then guaranteed to commit both
+# sides without a reconciler tick reading a half-applied state in between.
+#
+# This lock does NOT prevent two concurrent PATCHes from clobbering each
+# other (writer-vs-writer lost-update). At single-user-dashboard rates that's
+# physically near-impossible, so we don't pay for it. When we add a second
+# writer of any kind (extra admin, CLI, Terraform/IaC provider, webhook,
+# offline-capable dashboard), switch to optimistic concurrency control: add a
+# `version` column to api_keys, require an expected_version in PATCH bodies,
+# UPDATE ... WHERE id=? AND version=? atomically, return 409 on rowcount=0.
 _reconcile_lock = asyncio.Lock()
 
 
@@ -105,18 +116,19 @@ async def create_key(
     plaintext = "ckp_" + secrets.token_urlsafe(32)
     key_hash = _hash_token(plaintext)
 
-    key_id = await asyncio.to_thread(
-        db.api_key_create, key_hash, label, notes.strip()[:255]
-    )
+    async with _reconcile_lock:
+        key_id = await asyncio.to_thread(
+            db.api_key_create, key_hash, label, notes.strip()[:255]
+        )
 
-    # Push to KV. If this fails, roll back the local row so the user doesn't
-    # walk away with a token that will 401 at the edge.
-    try:
-        await cloudflare_kv.put(key_hash, label, metadata={"label": label})
-    except Exception as e:
-        await asyncio.to_thread(db.api_key_delete_local, key_hash)
-        logger.error("KV write failed during create, rolled back local row: %s", e)
-        raise HTTPException(502, f"Failed to sync key to Cloudflare KV: {e}")
+        # Push to KV. If this fails, roll back the local row so the user doesn't
+        # walk away with a token that will 401 at the edge.
+        try:
+            await cloudflare_kv.put(key_hash, label, metadata={"label": label})
+        except Exception as e:
+            await asyncio.to_thread(db.api_key_delete_local, key_hash)
+            logger.error("KV write failed during create, rolled back local row: %s", e)
+            raise HTTPException(502, f"Failed to sync key to Cloudflare KV: {e}")
 
     row = await asyncio.to_thread(db.api_key_get, key_id)
     logger.info("API key created: id=%d label=%s", key_id, label)
@@ -162,27 +174,28 @@ async def update_key(
     clean_label = label.strip()[:64] if label is not None else None
     clean_notes = notes.strip()[:255] if notes is not None else None
 
-    row = await asyncio.to_thread(
-        db.api_key_update_label, key_id, clean_label, clean_notes
-    )
+    async with _reconcile_lock:
+        row = await asyncio.to_thread(
+            db.api_key_update_label, key_id, clean_label, clean_notes
+        )
 
-    # If label changed and the key is still active, update the KV value.
-    if (
-        clean_label is not None
-        and clean_label != before["label"]
-        and before.get("revoked_at") is None
-        and kv_is_configured()
-    ):
-        try:
-            await cloudflare_kv.put(
-                before["key_hash"], clean_label, metadata={"label": clean_label}
-            )
-        except Exception as e:
-            # Drift: log and let the reconciler heal it next tick.
-            logger.warning(
-                "KV label update failed for id=%d (reconciler will retry): %s",
-                key_id, e,
-            )
+        # If label changed and the key is still active, update the KV value.
+        if (
+            clean_label is not None
+            and clean_label != before["label"]
+            and before.get("revoked_at") is None
+            and kv_is_configured()
+        ):
+            try:
+                await cloudflare_kv.put(
+                    before["key_hash"], clean_label, metadata={"label": clean_label}
+                )
+            except Exception as e:
+                # Drift: log and let the reconciler heal it next tick.
+                logger.warning(
+                    "KV label update failed for id=%d (reconciler will retry): %s",
+                    key_id, e,
+                )
 
     return _public_row(row)
 
@@ -195,18 +208,19 @@ async def revoke_key(key_id: int, request: Request):
     if not before:
         raise HTTPException(404, "API key not found.")
 
-    row = await asyncio.to_thread(db.api_key_revoke, key_id)
-
     kv_warning = None
-    if kv_is_configured():
-        try:
-            await cloudflare_kv.delete(before["key_hash"])
-        except Exception as e:
-            # Reconciler will retry. Don't fail the request -- local row is
-            # already revoked, so identify()/lookup will reject it on direct
-            # origin hits even if KV still has it briefly.
-            kv_warning = f"KV delete failed: {e}. Reconciler will retry."
-            logger.warning("KV delete failed for id=%d: %s", key_id, e)
+    async with _reconcile_lock:
+        row = await asyncio.to_thread(db.api_key_revoke, key_id)
+
+        if kv_is_configured():
+            try:
+                await cloudflare_kv.delete(before["key_hash"])
+            except Exception as e:
+                # Reconciler will retry. Don't fail the request -- local row is
+                # already revoked, so identify()/lookup will reject it on direct
+                # origin hits even if KV still has it briefly.
+                kv_warning = f"KV delete failed: {e}. Reconciler will retry."
+                logger.warning("KV delete failed for id=%d: %s", key_id, e)
 
     logger.info("API key revoked: id=%d label=%s", key_id, before["label"])
     out = _public_row(row)
