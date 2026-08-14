@@ -57,7 +57,9 @@ def init_client():
     global http_client
     http_client = httpx.AsyncClient(
         base_url=settings.upstream_url,
-        timeout=httpx.Timeout(connect=30.0, read=600.0, write=30.0, pool=30.0),
+        # read must cover a full non-streaming generation; long thinking
+        # responses on slow dense models can exceed 10 minutes
+        timeout=httpx.Timeout(connect=30.0, read=1200.0, write=30.0, pool=30.0),
     )
 
 
