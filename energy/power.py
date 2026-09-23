@@ -37,7 +37,11 @@ _DEFAULT_WATTS_PER_THREAD = 4.0
 # Reap active requests that never called end_request() (client disconnect,
 # upstream error before the background task was wired up, etc.). A stuck
 # entry in _active_requests pins TDP-fallback power at 0.8 * TDP forever.
-_STALE_REQUEST_TIMEOUT_S = 600.0
+# Every proxy path calls end_request(), so this is only a leak backstop; it
+# must sit well above the longest real request (httpx read timeout is
+# 1200s, and image edits on slow models run 7-8 minutes), or a legitimate
+# request is reaped mid-flight and logs zero energy.
+_STALE_REQUEST_TIMEOUT_S = 3600.0
 _REAP_INTERVAL_S = 30.0
 
 
@@ -209,6 +213,9 @@ class PowerSample:
 class ActiveRequest:
     start_time: float  # monotonic
     tokens_out: int = 0
+    # Accumulated by the sampler as each sample lands, so a request's energy
+    # does not depend on the sample deque still holding its whole duration.
+    energy_joules: float = 0.0
 
 
 @dataclass
@@ -608,6 +615,7 @@ class PowerMonitor:
             pm_thread.start()
 
         last_reap = time.monotonic()
+        last_ts: float | None = None
         while not self._stop_event.is_set():
             cpu_w = self._read_cpu_watts()
             gpu_w = self._read_gpu_watts()
@@ -616,8 +624,17 @@ class PowerMonitor:
                 cpu_watts=cpu_w,
                 gpu_watts=gpu_w,
             )
+            # Integrate over the measured gap, not the nominal interval: each
+            # loop pass costs the sensor reads on top of the wait.
+            dt = interval if last_ts is None else sample.timestamp - last_ts
+            last_ts = sample.timestamp
             with self._lock:
                 self._samples.append(sample)
+                # Split this sample's energy evenly across in-flight requests.
+                if self._active_requests:
+                    share = sample.total_watts * dt / len(self._active_requests)
+                    for req in self._active_requests.values():
+                        req.energy_joules += share
 
             if sample.timestamp - last_reap >= _REAP_INTERVAL_S:
                 self._reap_stale_requests()
@@ -660,31 +677,11 @@ class PowerMonitor:
                 return EnergyResult(energy_joules=0.0, power_source=self._power_source)
 
             req.tokens_out = tokens_out
-            end_time = time.monotonic()
 
             if self._power_source == "none":
                 return EnergyResult(energy_joules=0.0, power_source="none")
 
-            # Integrate power over request duration using samples
-            total_joules = 0.0
-            interval = 1.0 / settings.power_sample_hz
-
-            for sample in self._samples:
-                if sample.timestamp < req.start_time:
-                    continue
-                if sample.timestamp > end_time:
-                    break
-
-                concurrent = sum(
-                    1 for r in self._active_requests.values()
-                    if r.start_time <= sample.timestamp
-                )
-                concurrent += 1  # +1 for the request we just removed
-
-                share = sample.total_watts * interval / concurrent
-                total_joules += share
-
-            return EnergyResult(energy_joules=total_joules, power_source=self._power_source)
+            return EnergyResult(energy_joules=req.energy_joules, power_source=self._power_source)
 
     def get_current_power(self) -> dict:
         with self._lock:

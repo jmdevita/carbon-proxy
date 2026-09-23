@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import time
 import logging
 
@@ -48,6 +49,31 @@ def _extract_tokens(data: dict) -> tuple[int, int, int]:
     cached_tokens = int(details.get("cached_tokens") or 0)
     fresh_tokens_in = max(0, int(tokens_in) - cached_tokens)
     return fresh_tokens_in, int(tokens_out), cached_tokens
+
+def _multipart_field(body: bytes, content_type: str, name: str) -> str:
+    """Return a plain (non-file) field from a multipart/form-data body, or "".
+
+    Only the target field is decoded; file parts are skipped without being
+    copied. Used to read `model` from OpenAI /v1/images/edits uploads, which
+    are multipart rather than JSON.
+    """
+    match = re.search(r'boundary="?([^";]+)"?', content_type)
+    if not match:
+        return ""
+    delimiter = b"--" + match.group(1).encode("latin-1")
+    for part in body.split(delimiter)[1:]:
+        head, sep, value = part.partition(b"\r\n\r\n")
+        if not sep:
+            continue
+        disposition = next(
+            (line for line in head.decode("latin-1").split("\r\n")
+             if line.lower().startswith("content-disposition:")),
+            "",
+        )
+        if f'name="{name}"' in disposition and "filename=" not in disposition:
+            return value.removesuffix(b"\r\n").decode("utf-8", errors="replace").strip()
+    return ""
+
 
 # Shared httpx client, initialized in main.py lifespan
 http_client: httpx.AsyncClient = None
@@ -136,6 +162,9 @@ async def proxy_request(request: Request, path: str):
                 body = json.dumps(parsed_body).encode("utf-8")
         else:
             source = identify(request)
+            content_type = request.headers.get("content-type", "")
+            if content_type.startswith("multipart/form-data"):
+                model = _multipart_field(body, content_type, "model")[:255]
 
         start_time = time.monotonic()
         request_id = power_monitor.begin_request()
