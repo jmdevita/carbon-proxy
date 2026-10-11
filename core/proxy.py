@@ -179,7 +179,7 @@ async def proxy_request(request: Request, path: str):
     if is_post and is_streaming:
         return await _handle_streaming(upstream_req, source, model, start_time, request_id)
     elif is_post and body:
-        return await _handle_non_streaming(upstream_req, source, model, start_time, request_id)
+        return await _handle_non_streaming(request, upstream_req, source, model, start_time, request_id)
     else:
         return await _handle_passthrough(upstream_req)
 
@@ -194,7 +194,44 @@ async def _handle_passthrough(upstream_req: httpx.Request) -> Response:
     )
 
 
+async def _wait_for_disconnect(request: Request) -> None:
+    """Return once the client has hung up, and never otherwise."""
+    try:
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
+    except Exception:
+        # Without a working watcher, let the upstream call run to completion
+        # rather than cancel it for a client that may still be there.
+        logger.exception("Disconnect watcher failed; upstream request will not be cancelled")
+        await asyncio.Event().wait()
+
+
+async def _send_unless_disconnected(request: Request, upstream_req: httpx.Request) -> httpx.Response | None:
+    """Send upstream, cancelling it (and returning None) if the client hangs up first.
+
+    Starlette does not cancel a handler when its client disconnects. Without
+    this, a client that times out and retries leaves the abandoned generation
+    running upstream, holding a slot that its retry then queues behind.
+    Cancelling the send closes the upstream connection, which llama-swap and
+    llama-server treat as a cancel.
+    """
+    send_task = asyncio.create_task(http_client.send(upstream_req))
+    disconnect_task = asyncio.create_task(_wait_for_disconnect(request))
+    try:
+        await asyncio.wait({send_task, disconnect_task}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        disconnect_task.cancel()
+        if not send_task.done():
+            send_task.cancel()
+            # Let httpx finish closing the upstream connection before returning
+            await asyncio.wait({send_task})
+    if send_task.cancelled():
+        return None
+    return send_task.result()
+
+
 async def _handle_non_streaming(
+    request: Request,
     upstream_req: httpx.Request,
     source: str,
     model: str,
@@ -202,7 +239,7 @@ async def _handle_non_streaming(
     request_id: str,
 ) -> Response:
     try:
-        resp = await http_client.send(upstream_req)
+        resp = await _send_unless_disconnected(request, upstream_req)
     except Exception:
         # Upstream failed before we got a response; close the active-request
         # entry so it can't pin TDP-fallback power at the "active" load factor.
@@ -210,15 +247,14 @@ async def _handle_non_streaming(
         raise
 
     duration_ms = int((time.monotonic() - start_time) * 1000)
-    body = resp.content
 
     tokens_in = 0
     tokens_out = 0
     cached_tokens = 0
-    content_type = resp.headers.get("content-type", "")
+    content_type = resp.headers.get("content-type", "") if resp is not None else ""
     if "json" in content_type or "text" in content_type:
         try:
-            data = json.loads(body)
+            data = json.loads(resp.content)
             tokens_in, tokens_out, cached_tokens = _extract_tokens(data)
         except Exception:
             pass  # Non-JSON or no usage data -- that's fine
@@ -233,8 +269,13 @@ async def _handle_non_streaming(
         cached_tokens=cached_tokens,
     )
 
+    if resp is None:
+        # Client hung up; the energy is logged above, but there is no one to
+        # send a response to.
+        return Response(status_code=499)
+
     return Response(
-        content=body,
+        content=resp.content,
         status_code=resp.status_code,
         headers=dict(resp.headers),
     )
