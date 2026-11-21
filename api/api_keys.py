@@ -25,6 +25,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 import db
 from config import settings, kv_is_configured
 from integrations import cloudflare_kv
+from api.auth import require_admin
 
 logger = logging.getLogger("carbon-proxy.api_keys")
 
@@ -50,15 +51,7 @@ def _hash_token(plaintext: str) -> str:
 
 
 def _check_auth(request: Request):
-    """Reuse the OFFSET_API_KEY bearer pattern from /carbon/offset."""
-    if not settings.offset_api_key:
-        raise HTTPException(
-            403,
-            "API key management disabled -- set OFFSET_API_KEY to enable.",
-        )
-    auth = request.headers.get("authorization", "")
-    if not auth.startswith("Bearer ") or auth[7:].strip() != settings.offset_api_key:
-        raise HTTPException(401, "Invalid or missing management API key.")
+    require_admin(request, "API key management")
 
 
 def _public_row(row: dict) -> dict:

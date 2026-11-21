@@ -44,7 +44,10 @@ carbon-proxy:
     - ./carbon-proxy/data:/data
     - /sys/class/powercap:/sys/class/powercap:ro    # CPU power (RAPL)
     - /sys/class/drm:/sys/class/drm:ro              # GPU power (AMD/Intel hwmon)
-  privileged: true    # Required to read hardware power sensors
+  cap_add:
+    - SYS_ADMIN
+  security_opt:
+    - systempaths=unconfined    # Unmasks /sys/devices/virtual/powercap (RAPL)
   restart: unless-stopped
 ```
 
@@ -52,7 +55,7 @@ carbon-proxy:
 docker compose up -d
 ```
 
-> **Why `privileged: true`?** RAPL energy counters and GPU hwmon sensors require elevated access. Without it, Carbon Proxy falls back to TDP estimation. To avoid privileged mode, grant read access on the host instead:
+> **Why the extra permissions?** Docker masks the RAPL energy counters by default, and reading them needs elevated access. `systempaths=unconfined` plus `SYS_ADMIN` is the narrowest setting that exposes them; `privileged: true` also works but grants far more. Without either, Carbon Proxy silently falls back to TDP estimation. The counters must also be readable on the host:
 > ```bash
 > sudo chmod a+r /sys/class/powercap/intel-rapl:*/energy_uj
 > ```

@@ -189,6 +189,9 @@ let _latestHeatmap = [];
 // Build query for heatmap: ignore time range, keep source filter only
 function buildHeatmapQuery() {
   const params = new URLSearchParams();
+  // The grid draws 53 weeks; two extra days cover timezone edges.
+  const since = new Date(Date.now() - (HEATMAP_WEEKS * HEATMAP_DAYS + 2) * 86400000);
+  params.set('since', since.toISOString());
   if (activeSource) params.set('source', activeSource);
   const qs = params.toString();
   return qs ? '?' + qs : '';
@@ -251,6 +254,13 @@ function renderDailyBarChart(dailyData) {
   dailyChart.update('none');
 }
 
+// YYYY-MM-DD for a Date in the browser's own timezone. toISOString() would
+// convert to UTC first and shift the day for anyone east of Greenwich.
+function localDateKey(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 // Aggregate daily data by date for the heatmap (collapses sources)
 function aggregateByDate(dailyData, metric) {
   const m = {};
@@ -301,7 +311,7 @@ function renderHeatmap(dailyData, metric) {
     const d = new Date(start);
     d.setDate(d.getDate() + i);
     if (d > today) continue;
-    const k = d.toISOString().slice(0, 10);
+    const k = localDateKey(d);
     if (byDate[k] > max) max = byDate[k];
   }
 
@@ -345,7 +355,7 @@ function renderHeatmap(dailyData, metric) {
       const d = new Date(start);
       d.setDate(d.getDate() + col * HEATMAP_DAYS + row);
       const future = d > today;
-      const k = d.toISOString().slice(0, 10);
+      const k = localDateKey(d);
       const v = byDate[k] || 0;
       const cls = future ? 'heatmap-cell heatmap-future' : `heatmap-cell heatmap-l${bucket(v)}`;
       const x = labelW + col * (CELL + CELL_GAP);
@@ -477,22 +487,44 @@ function renderCarousel() {
 
 function fmtEq(v) { return v < 0.01 && v > 0 ? '<0.01' : v >= 1000 ? (v/1000).toFixed(1)+'k' : fmt(v, v < 1 ? 2 : 1); }
 
-async function refreshAll() {
-  const [summary, equiv, balance, live, daily, dailyAll, reqs, offsets] = await Promise.all([
+// Whether carbon intensity is dynamic (electricityMap configured); set by
+// refreshLive and read by refreshData to decide if the energy gauge shows.
+let _showEnergy = false;
+
+// Live power strip + chart. Cheap (reads the latest in-memory sample), so it
+// polls every few seconds.
+async function refreshLive() {
+  const live = await fetch('/carbon/live').then(r=>r.json()).catch(()=>null);
+  if (!live) return;
+
+  _showEnergy = live.dynamic_carbon_intensity || false;
+  document.getElementById('energyGauge').style.display = _showEnergy ? '' : 'none';
+  document.querySelector('.gauges').style.gap = _showEnergy ? '24px' : '64px';
+
+  document.getElementById('cpuW').textContent = fmt(live.cpu_watts,1) + 'W';
+  // An integrated GPU's power is part of the CPU package reading, not separate.
+  document.getElementById('gpuW').textContent =
+    live.gpu_method === 'in_cpu_package' ? 'in CPU' : fmt(live.gpu_watts,1) + 'W';
+  document.getElementById('totalW').textContent = fmt(live.total_watts,1) + 'W';
+  document.getElementById('pSource').textContent = `${live.power_source} (${live.cpu_method}/${live.gpu_method})`;
+  document.getElementById('activeR').textContent = live.active_requests || 0;
+  updatePowerChart(live);
+}
+
+// Everything backed by database queries. Polled slowly; also runs on filter
+// changes and the Refresh button.
+async function refreshData() {
+  const [summary, balance, daily, dailyAll, reqs, offsets] = await Promise.all([
     fetch('/carbon/summary' + buildQuery()).then(r=>r.json()).catch(()=>({})),
-    fetch('/carbon/equivalents' + buildQuery()).then(r=>r.json()).catch(()=>({})),
     fetch('/carbon/balance').then(r=>r.json()).catch(()=>({})),
-    fetch('/carbon/live').then(r=>r.json()).catch(()=>({})),
     fetch('/carbon/daily' + buildQuery()).then(r=>r.json()).catch(()=>[]),
     fetch('/carbon/daily' + buildHeatmapQuery()).then(r=>r.json()).catch(()=>[]),
     fetch('/carbon/requests' + buildQuery({limit:50})).then(r=>r.json()).catch(()=>[]),
     fetch('/carbon/offsets?limit=20').then(r=>r.json()).catch(()=>[]),
   ]);
-
-  // Show energy gauge only when carbon intensity is dynamic (electricityMap configured)
-  const showEnergy = live.dynamic_carbon_intensity || false;
-  document.getElementById('energyGauge').style.display = showEnergy ? '' : 'none';
-  document.querySelector('.gauges').style.gap = showEnergy ? '24px' : '64px';
+  // /carbon/summary already carries the equivalents for the same filters.
+  const equiv = summary.equivalents || {};
+  const showEnergy = _showEnergy;
 
   // Gauges
   const kwh = summary.total_energy_kwh || 0;
@@ -560,16 +592,6 @@ async function refreshAll() {
     `${fmt(off,2)}g neutralized` + (trees > 0 ? ` | ${trees} trees` : '');
   document.getElementById('balanceRight').textContent = `${fmt(pct,0)}% neutralized`;
 
-  // Live power
-  document.getElementById('cpuW').textContent = fmt(live.cpu_watts,1) + 'W';
-  // An integrated GPU's power is part of the CPU package reading, not separate.
-  document.getElementById('gpuW').textContent =
-    live.gpu_method === 'in_cpu_package' ? 'in CPU' : fmt(live.gpu_watts,1) + 'W';
-  document.getElementById('totalW').textContent = fmt(live.total_watts,1) + 'W';
-  document.getElementById('pSource').textContent = `${live.power_source} (${live.cpu_method}/${live.gpu_method})`;
-  document.getElementById('activeR').textContent = live.active_requests || 0;
-  updatePowerChart(live);
-
   // Daily chart (bar = filtered; heatmap = all-time, source-filtered only)
   _latestHeatmap = dailyAll || [];
   updateDailyChart(daily);
@@ -600,6 +622,12 @@ async function refreshAll() {
     <td>${r.tree_count||'--'}</td>
     <td>${r.certificate_url&&safeUrl(r.certificate_url) ? '<a href="'+esc(safeUrl(r.certificate_url))+'" target="_blank" rel="noopener" style="color:var(--primary);">View</a>' : '--'}</td>
   </tr>`).join('') : '<tr><td colspan="6" style="color:var(--muted);text-align:center;">No offsets</td></tr>';
+}
+
+async function refreshAll() {
+  // Live first so the energy-gauge visibility is known before data renders.
+  await refreshLive();
+  await refreshData();
 }
 
 function getOffsetKey() {
@@ -1276,7 +1304,8 @@ applyDailyViewUI();
 loadSources();
 loadApiKeys();
 refreshAll();
-setInterval(refreshAll, 3000);       // Data + power chart every 3s
+setInterval(refreshLive, 3000);      // Power strip + chart every 3s
+setInterval(refreshData, 30000);     // Database-backed panels every 30s
 setInterval(loadSources, 60000);     // Refresh source list every minute
 setInterval(loadApiKeys, 30000);     // Refresh API keys (last_used_at) every 30s
 // Equivalents carousel: continuous auto-scroll with drag + wheel control

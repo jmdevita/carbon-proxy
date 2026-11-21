@@ -105,8 +105,38 @@ def init_db():
     req_cols = [r["name"] for r in conn.execute("PRAGMA table_info(requests)").fetchall()]
     if "cached_tokens" not in req_cols:
         conn.execute("ALTER TABLE requests ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0")
+    # Idempotent migration: local_date is the request's calendar day in the
+    # report timezone, stored so daily reports can GROUP BY it in SQL.
+    if "local_date" not in req_cols:
+        conn.execute("ALTER TABLE requests ADD COLUMN local_date TEXT NOT NULL DEFAULT ''")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_local_date ON requests(local_date)")
     conn.commit()
+    _backfill_local_dates(conn)
     logger.info("Database initialized at %s", settings.sqlite_path)
+
+
+def _backfill_local_dates(conn: sqlite3.Connection):
+    """Fill local_date for rows that lack it, or for all rows if the report
+    timezone changed since they were stamped."""
+    tz_name = settings.report_timezone
+    row = conn.execute(
+        "SELECT value FROM kv_settings WHERE key = 'local_date_tz'"
+    ).fetchone()
+    tz_changed = row is None or row["value"] != tz_name
+    where = "" if tz_changed else "WHERE local_date = ''"
+    rows = conn.execute(f"SELECT id, timestamp FROM requests {where}").fetchall()
+    if rows:
+        conn.executemany(
+            "UPDATE requests SET local_date = ? WHERE id = ?",
+            [(_local_date(r["timestamp"]), r["id"]) for r in rows],
+        )
+        logger.info("Stamped local_date on %d request rows (timezone %s)", len(rows), tz_name)
+    conn.execute(
+        "INSERT INTO kv_settings (key, value) VALUES ('local_date_tz', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (tz_name,),
+    )
+    conn.commit()
 
 
 def log_request(
@@ -126,10 +156,10 @@ def log_request(
         conn.execute(
             """INSERT INTO requests
                (timestamp, source, model, tokens_in, tokens_out, duration_ms,
-                energy_joules, co2_grams, power_source, cached_tokens)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                energy_joules, co2_grams, power_source, cached_tokens, local_date)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (now, source, model, tokens_in, tokens_out, duration_ms,
-             energy_joules, co2_grams, power_source, cached_tokens),
+             energy_joules, co2_grams, power_source, cached_tokens, _local_date(now)),
         )
         # Stamp the key here rather than at auth time: requests validated by
         # the Cloudflare worker arrive with only the label (X-Carbon-Source),
@@ -159,6 +189,28 @@ async def log_request_async(
     )
 
 
+def _request_filters(
+    source: str | None, model: str | None, since: str | None, until: str | None,
+) -> tuple[str, list]:
+    """Build the WHERE clause shared by the request readers."""
+    conditions = []
+    params: list = []
+    if source:
+        conditions.append("source = ?")
+        params.append(source)
+    if model:
+        conditions.append("model = ?")
+        params.append(model)
+    if since:
+        conditions.append("timestamp >= ?")
+        params.append(since)
+    if until:
+        conditions.append("timestamp <= ?")
+        params.append(until)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    return where, params
+
+
 def get_requests(
     source: str | None = None,
     model: str | None = None,
@@ -167,29 +219,13 @@ def get_requests(
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict]:
+    where, params = _request_filters(source, model, since, until)
     with _db_lock:
         conn = _get_conn()
-        conditions = []
-        params = []
-
-        if source:
-            conditions.append("source = ?")
-            params.append(source)
-        if model:
-            conditions.append("model = ?")
-            params.append(model)
-        if since:
-            conditions.append("timestamp >= ?")
-            params.append(since)
-        if until:
-            conditions.append("timestamp <= ?")
-            params.append(until)
-
-        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        query = f"SELECT * FROM requests {where} ORDER BY id DESC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
-
-        rows = conn.execute(query, params).fetchall()
+        rows = conn.execute(
+            f"SELECT * FROM requests {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
         return [dict(row) for row in rows]
 
 
@@ -199,25 +235,9 @@ def get_summary(
     since: str | None = None,
     until: str | None = None,
 ) -> dict:
+    where, params = _request_filters(source, model, since, until)
     with _db_lock:
         conn = _get_conn()
-        conditions = []
-        params = []
-
-        if source:
-            conditions.append("source = ?")
-            params.append(source)
-        if model:
-            conditions.append("model = ?")
-            params.append(model)
-        if since:
-            conditions.append("timestamp >= ?")
-            params.append(since)
-        if until:
-            conditions.append("timestamp <= ?")
-            params.append(until)
-
-        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         query = f"""
             SELECT
                 COUNT(*) as total_requests,
@@ -240,52 +260,28 @@ def get_daily_breakdown(
     since: str | None = None,
     until: str | None = None,
 ) -> list[dict]:
+    """Per-day, per-source totals, bucketed by the report timezone.
+
+    Groups on the stored local_date column so the work stays in SQLite; the
+    dashboard polls this, and it used to pull every row into Python.
+    """
+    where, params = _request_filters(source, model, since, until)
     with _db_lock:
         conn = _get_conn()
-        conditions = []
-        params = []
-
-        if source:
-            conditions.append("source = ?")
-            params.append(source)
-        if model:
-            conditions.append("model = ?")
-            params.append(model)
-        if since:
-            conditions.append("timestamp >= ?")
-            params.append(since)
-        if until:
-            conditions.append("timestamp <= ?")
-            params.append(until)
-
-        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        query = f"""
-            SELECT timestamp, source,
-                   COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0) AS tokens,
-                   COALESCE(energy_joules, 0) AS energy_joules,
-                   COALESCE(co2_grams, 0) AS co2_grams
+        rows = conn.execute(
+            f"""
+            SELECT local_date AS date, source,
+                   COUNT(*) AS requests,
+                   COALESCE(SUM(tokens_in + tokens_out), 0) AS total_tokens,
+                   COALESCE(SUM(energy_joules), 0) / 3600000.0 AS energy_kwh,
+                   COALESCE(SUM(co2_grams), 0) / 1000.0 AS co2_kg
             FROM requests {where}
-        """
-        rows = conn.execute(query, params).fetchall()
-
-    buckets: dict[tuple[str, str], dict] = {}
-    for r in rows:
-        date_str = _local_date(r["timestamp"])
-        src = r["source"]
-        b = buckets.setdefault((date_str, src), {
-            "date": date_str,
-            "source": src,
-            "requests": 0,
-            "total_tokens": 0,
-            "energy_kwh": 0.0,
-            "co2_kg": 0.0,
-        })
-        b["requests"] += 1
-        b["total_tokens"] += r["tokens"]
-        b["energy_kwh"] += r["energy_joules"] / 3600000.0
-        b["co2_kg"] += r["co2_grams"] / 1000.0
-
-    return sorted(buckets.values(), key=lambda x: x["date"], reverse=True)
+            GROUP BY local_date, source
+            ORDER BY local_date DESC
+            """,
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def log_offset(
@@ -473,9 +469,25 @@ def api_key_update_label(key_id: int, label: str | None, notes: str | None) -> d
     params.append(key_id)
     with _db_lock:
         conn = _get_conn()
+        before = conn.execute(
+            "SELECT label FROM api_keys WHERE id = ?", (key_id,)
+        ).fetchone()
         conn.execute(
             f"UPDATE api_keys SET {', '.join(fields)} WHERE id = ?", params
         )
+        # Requests are attributed by label, so a rename would otherwise strand
+        # the key's history under the old name. Skip it when another key
+        # shares the old label, since its rows cannot be told apart.
+        if label is not None and before and before["label"] != label:
+            shared = conn.execute(
+                "SELECT 1 FROM api_keys WHERE label = ? AND id != ?",
+                (before["label"], key_id),
+            ).fetchone()
+            if not shared:
+                conn.execute(
+                    "UPDATE requests SET source = ? WHERE source = ?",
+                    (label, before["label"]),
+                )
         conn.commit()
     return api_key_get(key_id)
 
@@ -533,24 +545,20 @@ def api_key_stats(label: str, since_iso: str, recent_limit: int = 10) -> dict:
         ).fetchone()
         totals = dict(totals_row)
 
-        # Pull raw rows; bucket by report-tz date in Python so day boundaries
-        # match the dashboard's displayed timezone rather than UTC.
-        daily_raw = conn.execute(
-            """
-            SELECT timestamp, COALESCE(co2_grams, 0) AS co2_grams
-            FROM requests
-            WHERE source = ? AND timestamp >= ?
-            """,
-            (label, since_iso),
-        ).fetchall()
-
+        daily_by_date = {
+            r["date"]: dict(r)
+            for r in conn.execute(
+                """
+                SELECT local_date AS date, COUNT(*) AS requests,
+                       COALESCE(SUM(co2_grams), 0) AS co2_grams
+                FROM requests
+                WHERE source = ? AND timestamp >= ?
+                GROUP BY local_date
+                """,
+                (label, since_iso),
+            ).fetchall()
+        }
         tz = _report_tz()
-        daily_by_date: dict[str, dict] = {}
-        for r in daily_raw:
-            d = _parse_utc(r["timestamp"]).astimezone(tz).date().isoformat()
-            b = daily_by_date.setdefault(d, {"date": d, "requests": 0, "co2_grams": 0.0})
-            b["requests"] += 1
-            b["co2_grams"] += r["co2_grams"]
 
         # Pad to exactly 7 days ending today in the report timezone so the
         # sparkline has a stable x-axis.

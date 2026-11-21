@@ -8,6 +8,7 @@ from config import settings
 from energy.power import monitor as power_monitor
 from api.offsets import purchase_offset, get_quote, get_auto_offset_status
 from api import auto_offset
+from api.auth import require_admin
 
 router = APIRouter(prefix="/carbon", tags=["carbon"])
 
@@ -130,12 +131,7 @@ async def manual_offset(
     co2_grams: float | None = Query(None, description="CO2 to offset in grams. If omitted, offsets current balance."),
 ):
     """Manually trigger an offset purchase."""
-    # Auth check
-    if not settings.offset_api_key:
-        raise HTTPException(403, "Offset endpoint disabled -- set OFFSET_API_KEY to enable")
-    auth = request.headers.get("authorization", "")
-    if not auth.startswith("Bearer ") or auth[7:].strip() != settings.offset_api_key:
-        raise HTTPException(401, "Invalid or missing offset API key")
+    require_admin(request, "Offset endpoint")
 
     provider = settings.offset_provider
     if provider not in ("cnaught", "tree-nation", "both"):
@@ -193,11 +189,7 @@ async def auto_offset_toggle(
     enabled: bool = Body(..., embed=True),
 ):
     """Enable/disable auto-offset. Same Bearer auth as /carbon/offset."""
-    if not settings.offset_api_key:
-        raise HTTPException(403, "Auto-offset toggle disabled -- set OFFSET_API_KEY to enable")
-    auth = request.headers.get("authorization", "")
-    if not auth.startswith("Bearer ") or auth[7:].strip() != settings.offset_api_key:
-        raise HTTPException(401, "Invalid or missing offset API key")
+    require_admin(request, "Auto-offset toggle")
 
     await asyncio.to_thread(db.set_kv, "auto_offset_enabled", "true" if enabled else "false")
     if enabled:

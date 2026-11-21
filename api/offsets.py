@@ -1,7 +1,9 @@
 import asyncio
+import json
 import logging
 import math
 import time
+import uuid
 from dataclasses import dataclass
 
 import httpx
@@ -28,39 +30,139 @@ class OffsetResult:
     tree_count: int = 0
 
 
+# kv_settings key holding the order attempt whose outcome is not yet known.
+_PENDING_ORDER_KEY = "cnaught_pending_order"
+# CNaught remembers an Idempotency-Key for 24 hours; stop reusing ours a
+# little earlier so a retry can never land on an expired key and buy again.
+_IDEMPOTENCY_KEY_MAX_AGE_S = 23 * 3600
+
+
+def _cnaught_headers() -> dict:
+    return {
+        "Authorization": f"Bearer {settings.cnaught_api_key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _cnaught_result(order: dict) -> OffsetResult:
+    return OffsetResult(
+        provider="cnaught",
+        co2_grams_offset=float(order.get("amount_kg") or 0) * 1000,
+        cost_cents=order.get("price_usd_cents") or 0,
+        currency="USD",
+        certificate_url=order.get("certificate_public_url") or "",
+        order_id=order.get("id") or "",
+    )
+
+
+async def _load_pending_order() -> dict | None:
+    raw = await asyncio.to_thread(db.get_kv, _PENDING_ORDER_KEY)
+    if not raw:
+        return None
+    try:
+        pending = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return pending if isinstance(pending, dict) and pending.get("key") else None
+
+
+async def _save_pending_order(pending: dict | None) -> None:
+    await asyncio.to_thread(
+        db.set_kv, _PENDING_ORDER_KEY, json.dumps(pending) if pending else ""
+    )
+
+
+async def _find_cnaught_order(client: httpx.AsyncClient, attempt_key: str) -> dict | None:
+    """Look for an order we placed under `attempt_key` among recent orders.
+
+    Every order carries its attempt key in `metadata`, which is how an order
+    that was placed but never acknowledged (timeout, crash) gets recognised.
+    """
+    resp = await client.get(
+        f"{settings.cnaught_base_url}/orders",
+        params={"limit": 100},
+        headers=_cnaught_headers(),
+        timeout=30,
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    orders = body.get("data", []) if isinstance(body, dict) else body
+    for order in orders or []:
+        if isinstance(order, dict) and order.get("metadata") == attempt_key:
+            return order
+    return None
+
+
 async def purchase_cnaught(co2_grams: float) -> OffsetResult:
-    """Purchase carbon credits via CNaught API (1 kg minimum)."""
+    """Purchase carbon credits via CNaught API (1 kg minimum).
+
+    An order request that times out may still have gone through. To avoid
+    paying twice, each attempt is recorded locally before it is sent and
+    tagged at CNaught two ways: an Idempotency-Key header (a retry with the
+    same key returns the original order) and the same value in the order's
+    `metadata` (so the order can still be found after the key has expired).
+    The record is cleared only once the outcome is known.
+    """
     if not settings.cnaught_api_key:
         raise ValueError("CNAUGHT_API_KEY not configured")
 
     # Convert grams to kg, round up to 1 kg minimum
     amount_kg = max(1, math.ceil(co2_grams / 1000))
 
-    payload = {"amount_kg": amount_kg}
-    if settings.cnaught_portfolio_id:
-        payload["portfolio_id"] = settings.cnaught_portfolio_id
-
     async with httpx.AsyncClient() as client:
+        attempt_key = None
+        pending = await _load_pending_order()
+        if pending:
+            # An earlier attempt ended without an answer. If its order exists,
+            # that is the purchase: record it instead of buying again.
+            existing = await _find_cnaught_order(client, pending["key"])
+            if existing:
+                logger.warning(
+                    "Recovered CNaught order %s from an unacknowledged attempt; not re-buying",
+                    existing.get("id"),
+                )
+                await _save_pending_order(None)
+                return _cnaught_result(existing)
+            fresh = time.time() - float(pending.get("created", 0)) < _IDEMPOTENCY_KEY_MAX_AGE_S
+            same_request = (
+                pending.get("amount_kg") == amount_kg
+                and pending.get("portfolio_id", "") == settings.cnaught_portfolio_id
+            )
+            if fresh and same_request:
+                attempt_key = pending["key"]
+
+        if attempt_key is None:
+            attempt_key = str(uuid.uuid4())
+            await _save_pending_order({
+                "key": attempt_key,
+                "amount_kg": amount_kg,
+                "portfolio_id": settings.cnaught_portfolio_id,
+                "created": time.time(),
+            })
+
+        payload = {"amount_kg": amount_kg, "metadata": attempt_key}
+        if settings.cnaught_portfolio_id:
+            payload["portfolio_id"] = settings.cnaught_portfolio_id
+
         resp = await client.post(
             f"{settings.cnaught_base_url}/orders",
             json=payload,
-            headers={
-                "Authorization": f"Bearer {settings.cnaught_api_key}",
-                "Content-Type": "application/json",
-            },
+            headers={**_cnaught_headers(), "Idempotency-Key": attempt_key},
             timeout=30,
         )
+        # A timeout or connection error raises above and leaves the record in
+        # place, as do the statuses below: in all of them the order may or may
+        # not exist. Any other response is a definite answer.
+        outcome_unknown = resp.status_code in (409, 429) or resp.status_code >= 500
+        if not outcome_unknown:
+            await _save_pending_order(None)
         resp.raise_for_status()
         data = resp.json()
 
-    return OffsetResult(
-        provider="cnaught",
-        co2_grams_offset=amount_kg * 1000,
-        cost_cents=data.get("price_usd_cents", 0),
-        currency="USD",
-        certificate_url=data.get("certificate_public_url", "") or "",
-        order_id=data.get("id", ""),
-    )
+    result = _cnaught_result(data)
+    if not result.co2_grams_offset:
+        result.co2_grams_offset = amount_kg * 1000
+    return result
 
 
 async def purchase_tree_nation(co2_grams: float) -> OffsetResult:
@@ -215,7 +317,7 @@ async def purchase_offset(co2_grams: float, is_auto: bool = False) -> list[Offse
             await _log_and_append(result, results, is_auto=is_auto)
             logger.info(
                 "CNaught offset purchased%s: %d kg CO2, $%.2f, order=%s",
-                tag, math.ceil(co2_grams / 1000), result.cost_cents / 100, result.order_id,
+                tag, round(result.co2_grams_offset / 1000), result.cost_cents / 100, result.order_id,
             )
         except Exception as e:
             logger.error("CNaught offset failed: %s", e)

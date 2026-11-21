@@ -11,6 +11,10 @@ logger = logging.getLogger("carbon-proxy.carbon")
 _cached_intensity: float | None = None
 _cache_time: float = 0
 _CACHE_TTL = 1800  # 30 minutes
+# After a failed fetch, wait this long before trying again. Without it every
+# request retries (and waits out the timeout) for as long as the API is down.
+_RETRY_AFTER_FAILURE = 300  # 5 minutes
+_retry_not_before: float = 0
 
 
 def joules_to_kwh(joules: float) -> float:
@@ -31,7 +35,7 @@ def get_carbon_intensity() -> float:
     an async context, proxy.py wraps the whole _log_request chain in
     asyncio.to_thread via the BackgroundTask so this won't block the loop.
     """
-    global _cached_intensity, _cache_time
+    global _cached_intensity, _cache_time, _retry_not_before
 
     # Try electricityMap if configured
     if settings.electricitymap_api_key and settings.electricitymap_zone:
@@ -39,14 +43,24 @@ def get_carbon_intensity() -> float:
         if _cached_intensity is not None and (now - _cache_time) < _CACHE_TTL:
             return _cached_intensity
 
-        try:
-            intensity = _fetch_electricitymap_intensity()
-            _cached_intensity = intensity
-            _cache_time = now
-            logger.info("Updated carbon intensity from electricityMap: %.0f gCO2/kWh", intensity)
-            return intensity
-        except Exception as e:
-            logger.warning("Failed to fetch electricityMap data: %s, using static value", e)
+        if now >= _retry_not_before:
+            try:
+                intensity = _fetch_electricitymap_intensity()
+                _cached_intensity = intensity
+                _cache_time = now
+                logger.info("Updated carbon intensity from electricityMap: %.0f gCO2/kWh", intensity)
+                return intensity
+            except Exception as e:
+                _retry_not_before = now + _RETRY_AFTER_FAILURE
+                logger.warning(
+                    "Failed to fetch electricityMap data: %s; retrying in %ds, using %s meanwhile",
+                    e, _RETRY_AFTER_FAILURE,
+                    "last known value" if _cached_intensity is not None else "static value",
+                )
+
+        # A stale real reading is a better estimate than the static default.
+        if _cached_intensity is not None:
+            return _cached_intensity
 
     return settings.carbon_intensity
 

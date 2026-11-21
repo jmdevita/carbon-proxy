@@ -9,6 +9,7 @@ from fastapi import APIRouter, Request
 from starlette.responses import StreamingResponse, Response
 from starlette.background import BackgroundTask
 
+from api.auth import secrets_match
 from config import settings
 from core.client_id import identify
 import db
@@ -161,7 +162,7 @@ async def proxy_request(request: Request, path: str):
     came_via_cloudflare = "cf-connecting-ip" in request.headers
     if settings.worker_origin_secret and came_via_cloudflare:
         provided = request.headers.get("x-worker-origin-secret", "")
-        if provided != settings.worker_origin_secret:
+        if not secrets_match(provided, settings.worker_origin_secret):
             return Response(
                 content='{"error":"missing or invalid worker origin secret"}',
                 status_code=401,
@@ -224,8 +225,29 @@ async def proxy_request(request: Request, path: str):
         return await _handle_passthrough(upstream_req)
 
 
+def _upstream_error_response(exc: httpx.RequestError) -> Response:
+    """Report an unreachable or unresponsive upstream as a gateway error.
+
+    Letting the exception propagate would surface as a bare 500, which reads
+    as a carbon-proxy bug instead of "the model server is down".
+    """
+    timed_out = isinstance(exc, httpx.TimeoutException)
+    logger.warning("Upstream request failed: %s: %s", type(exc).__name__, exc)
+    return Response(
+        content=json.dumps({"error": {
+            "message": "Upstream timed out" if timed_out else "Upstream unreachable",
+            "type": "upstream_error",
+        }}),
+        status_code=504 if timed_out else 502,
+        media_type="application/json",
+    )
+
+
 async def _handle_passthrough(upstream_req: httpx.Request) -> Response:
-    resp = await http_client.send(upstream_req, stream=True)
+    try:
+        resp = await http_client.send(upstream_req, stream=True)
+    except httpx.RequestError as exc:
+        return _upstream_error_response(exc)
     return StreamingResponse(
         resp.aiter_raw(),
         status_code=resp.status_code,
@@ -280,10 +302,12 @@ async def _handle_non_streaming(
 ) -> Response:
     try:
         resp = await _send_unless_disconnected(request, upstream_req)
-    except Exception:
+    except Exception as exc:
         # Upstream failed before we got a response; close the active-request
         # entry so it can't pin TDP-fallback power at the "active" load factor.
         power_monitor.end_request(request_id, 0)
+        if isinstance(exc, httpx.RequestError):
+            return _upstream_error_response(exc)
         raise
 
     duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -337,10 +361,12 @@ async def _handle_streaming(
 ) -> StreamingResponse:
     try:
         resp = await http_client.send(upstream_req, stream=True)
-    except Exception:
+    except Exception as exc:
         # Upstream connection failed; release the active-request slot so a
         # leaked entry can't pin TDP-fallback power at the active load factor.
         power_monitor.end_request(request_id, 0)
+        if isinstance(exc, httpx.RequestError):
+            return _upstream_error_response(exc)
         raise
 
     # Mutable state shared between generator and background task
