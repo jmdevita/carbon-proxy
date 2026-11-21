@@ -178,6 +178,20 @@ def test_daily_endpoint_groups_logged_requests(stack):
     assert "equivalents" in summary
 
 
+def test_dashboard_assets_must_revalidate(stack):
+    for path in ("/dashboard", "/static/dashboard.js"):
+        resp = httpx.get(stack.proxy + path)
+        assert resp.status_code == 200
+        assert resp.headers["cache-control"] == "no-cache"
+    # An unchanged static file costs a bodiless 304, still marked for revalidation.
+    etag = httpx.get(stack.proxy + "/static/dashboard.js").headers["etag"]
+    again = httpx.get(stack.proxy + "/static/dashboard.js", headers={"if-none-match": etag})
+    assert again.status_code == 304
+    assert again.headers["cache-control"] == "no-cache"
+    proxied = httpx.post(stack.proxy + "/v1/chat/completions", json={"model": "m"})
+    assert "cache-control" not in proxied.headers
+
+
 def test_unreachable_upstream_is_a_502(stack):
     # Runs last: it stops the fake upstream for the rest of the module.
     stack.upstream_proc.terminate()

@@ -54,16 +54,6 @@ def init_db():
             power_source TEXT NOT NULL DEFAULT 'none'
         );
 
-        CREATE TABLE IF NOT EXISTS daily_summary (
-            date TEXT NOT NULL,
-            source TEXT NOT NULL,
-            total_tokens INTEGER NOT NULL DEFAULT 0,
-            total_energy_kwh REAL NOT NULL DEFAULT 0.0,
-            total_co2_kg REAL NOT NULL DEFAULT 0.0,
-            trees_to_offset REAL NOT NULL DEFAULT 0.0,
-            PRIMARY KEY (date, source)
-        );
-
         CREATE TABLE IF NOT EXISTS offsets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
@@ -437,17 +427,12 @@ def api_key_revoke(key_id: int) -> dict | None:
     with _db_lock:
         conn = _get_conn()
         now = datetime.now(timezone.utc).isoformat()
-        cur = conn.execute(
+        # No-op when the key is missing or already revoked; either way the
+        # current row is returned.
+        conn.execute(
             "UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
             (now, key_id),
         )
-        if cur.rowcount == 0:
-            # Either missing or already revoked -- return current state regardless
-            row = conn.execute(
-                "SELECT * FROM api_keys WHERE id = ?", (key_id,)
-            ).fetchone()
-            conn.commit()
-            return dict(row) if row else None
         conn.commit()
         row = conn.execute(
             "SELECT * FROM api_keys WHERE id = ?", (key_id,)

@@ -7,7 +7,6 @@ import time
 import uuid
 import threading
 import logging
-from collections import deque
 from dataclasses import dataclass
 
 from config import settings
@@ -133,7 +132,6 @@ def _detect_chip_tdp() -> tuple[float, float, str]:
     """Auto-detect CPU/GPU TDP from chip model. Returns (cpu_tdp, gpu_tdp, chip_name).
 
     Detection order:
-    1. CHIP_MODEL env var (for Docker where host info is unavailable)
     2. macOS sysctl (native macOS only)
     3. Linux /proc/cpuinfo
     """
@@ -220,9 +218,8 @@ class PowerSample:
 @dataclass
 class ActiveRequest:
     start_time: float  # monotonic
-    tokens_out: int = 0
     # Accumulated by the sampler as each sample lands, so a request's energy
-    # does not depend on the sample deque still holding its whole duration.
+    # is complete however long it runs.
     energy_joules: float = 0.0
 
 
@@ -234,7 +231,7 @@ class EnergyResult:
 
 class PowerMonitor:
     def __init__(self):
-        self._samples: deque[PowerSample] = deque(maxlen=settings.power_sample_hz * 60)
+        self._latest: PowerSample | None = None
         self._active_requests: dict[str, ActiveRequest] = {}
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -683,7 +680,7 @@ class PowerMonitor:
             dt = interval if last_ts is None else sample.timestamp - last_ts
             last_ts = sample.timestamp
             with self._lock:
-                self._samples.append(sample)
+                self._latest = sample
                 # Split this sample's energy evenly across in-flight requests.
                 if self._active_requests:
                     share = sample.total_watts * dt / len(self._active_requests)
@@ -724,40 +721,28 @@ class PowerMonitor:
             self._active_requests[request_id] = ActiveRequest(start_time=time.monotonic())
         return request_id
 
-    def end_request(self, request_id: str, tokens_out: int = 0) -> EnergyResult:
+    def end_request(self, request_id: str) -> EnergyResult:
+        """Close a request and return the energy attributed to it.
+
+        Safe to call twice: an unknown or already-closed id returns zero.
+        """
         with self._lock:
             req = self._active_requests.pop(request_id, None)
-            if req is None:
-                return EnergyResult(energy_joules=0.0, power_source=self._power_source)
-
-            req.tokens_out = tokens_out
-
-            if self._power_source == "none":
-                return EnergyResult(energy_joules=0.0, power_source="none")
-
-            return EnergyResult(energy_joules=req.energy_joules, power_source=self._power_source)
+        energy = req.energy_joules if req is not None else 0.0
+        return EnergyResult(energy_joules=energy, power_source=self._power_source)
 
     def get_current_power(self) -> dict:
         with self._lock:
-            if self._samples:
-                latest = self._samples[-1]
-                return {
-                    "cpu_watts": round(latest.cpu_watts, 2),
-                    "gpu_watts": round(latest.gpu_watts, 2),
-                    "total_watts": round(latest.total_watts, 2),
-                    "power_source": self._power_source,
-                    "cpu_method": self._cpu_method or "none",
-                    "gpu_method": self._gpu_method or "none",
-                    "active_requests": len(self._active_requests),
-                }
+            latest = self._latest
+            active = len(self._active_requests)
         return {
-            "cpu_watts": 0,
-            "gpu_watts": 0,
-            "total_watts": 0,
+            "cpu_watts": round(latest.cpu_watts, 2) if latest else 0,
+            "gpu_watts": round(latest.gpu_watts, 2) if latest else 0,
+            "total_watts": round(latest.total_watts, 2) if latest else 0,
             "power_source": self._power_source,
             "cpu_method": self._cpu_method or "none",
             "gpu_method": self._gpu_method or "none",
-            "active_requests": 0,
+            "active_requests": active,
         }
 
 

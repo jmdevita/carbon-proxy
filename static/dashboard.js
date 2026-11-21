@@ -425,13 +425,8 @@ async function toggleAutoOffset() {
   const key = getOffsetKey();
   if (!key) { cb.checked = !desired; return; }
   try {
-    const r = await fetch('/carbon/auto_offset/toggle', {
-      method: 'POST',
-      headers: {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'},
-      body: JSON.stringify({enabled: desired}),
-    });
+    const r = await adminFetch('/carbon/auto_offset/toggle', key, 'POST', {enabled: desired});
     if (!r.ok) {
-      if (r.status === 401) localStorage.removeItem('offset_api_key');
       cb.checked = !desired;
       const status = document.getElementById('offsetStatus');
       if (status) {
@@ -637,6 +632,19 @@ function getOffsetKey() {
     if (key) localStorage.setItem('offset_api_key', key.trim());
   }
   return key ? key.trim() : null;
+}
+
+// Call a management endpoint with the admin key. A 401 means the stored key
+// is wrong, so forget it and let the next action prompt for a new one.
+async function adminFetch(url, key, method, body) {
+  const headers = {'Authorization': 'Bearer ' + key};
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const r = await fetch(url, {
+    method, headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (r.status === 401) localStorage.removeItem('offset_api_key');
+  return r;
 }
 
 // -- API Keys management --
@@ -930,13 +938,8 @@ function startRename(keyId) {
     const key = getOffsetKey();
     if (!key) { labelEl.textContent = current; finish(); return; }
     try {
-      const r = await fetch('/carbon/api_keys/' + keyId, {
-        method: 'PATCH',
-        headers: {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'},
-        body: JSON.stringify({label: newLabel}),
-      });
+      const r = await adminFetch('/carbon/api_keys/' + keyId, key, 'PATCH', {label: newLabel});
       if (!r.ok) {
-        if (r.status === 401) localStorage.removeItem('offset_api_key');
         labelEl.textContent = current;
         finish();
         alert('Rename failed.');
@@ -1104,14 +1107,9 @@ async function createApiKey() {
   status.style.color = '';
 
   try {
-    const r = await fetch('/carbon/api_keys', {
-      method: 'POST',
-      headers: {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'},
-      body: JSON.stringify({label, notes}),
-    });
+    const r = await adminFetch('/carbon/api_keys', key, 'POST', {label, notes});
     const d = await r.json();
     if (!r.ok) {
-      if (r.status === 401) localStorage.removeItem('offset_api_key');
       status.textContent = d.detail || 'Failed to create key.';
       status.style.color = 'var(--red)';
       btn.disabled = false;
@@ -1158,12 +1156,8 @@ async function revokeApiKey(id) {
   if (!key) return;
 
   try {
-    const r = await fetch('/carbon/api_keys/' + id, {
-      method: 'DELETE',
-      headers: {'Authorization': 'Bearer ' + key},
-    });
+    const r = await adminFetch('/carbon/api_keys/' + id, key, 'DELETE');
     if (!r.ok) {
-      if (r.status === 401) localStorage.removeItem('offset_api_key');
       const d = await r.json().catch(() => ({}));
       alert(d.detail || 'Failed to revoke key.');
       return;
@@ -1270,10 +1264,7 @@ async function confirmOffset() {
   status.textContent = '';
 
   try {
-    const r = await fetch('/carbon/offset?co2_grams=' + grams, {
-      method: 'POST',
-      headers: {'Authorization': 'Bearer ' + key},
-    });
+    const r = await adminFetch('/carbon/offset?co2_grams=' + grams, key, 'POST');
     const d = await r.json();
     if (r.ok) {
       // Show cost in status
@@ -1285,7 +1276,6 @@ async function confirmOffset() {
       refreshAll();
       setTimeout(() => { closeOffsetModal(); status.style.color = ''; }, 2000);
     } else {
-      if (r.status === 401) localStorage.removeItem('offset_api_key');
       status.textContent = d.detail || d.message || 'Offset failed';
       status.style.color = 'var(--red)';
       btn.textContent = 'Purchase';

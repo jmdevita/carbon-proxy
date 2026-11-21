@@ -193,7 +193,7 @@ async def proxy_request(request: Request, path: str):
         # Valid JSON that is not an object (a bare array or string) has no
         # model/stream fields; forward it untouched like any other opaque body.
         if isinstance(parsed_body, dict) and parsed_body:
-            source = identify(request, parsed_body)[:255]
+            source = identify(request)[:255]
             model = (parsed_body.get("model", "") or "")[:255]
             is_streaming = parsed_body.get("stream", False)
 
@@ -305,7 +305,7 @@ async def _handle_non_streaming(
     except Exception as exc:
         # Upstream failed before we got a response; close the active-request
         # entry so it can't pin TDP-fallback power at the "active" load factor.
-        power_monitor.end_request(request_id, 0)
+        power_monitor.end_request(request_id)
         if isinstance(exc, httpx.RequestError):
             return _upstream_error_response(exc)
         raise
@@ -323,7 +323,7 @@ async def _handle_non_streaming(
         except Exception:
             pass  # Non-JSON or no usage data -- that's fine
 
-    energy = power_monitor.end_request(request_id, tokens_out)
+    energy = power_monitor.end_request(request_id)
     energy_kwh = joules_to_kwh(energy.energy_joules)
     co2_grams = await asyncio.to_thread(calculate_co2, energy_kwh)
 
@@ -364,7 +364,7 @@ async def _handle_streaming(
     except Exception as exc:
         # Upstream connection failed; release the active-request slot so a
         # leaked entry can't pin TDP-fallback power at the active load factor.
-        power_monitor.end_request(request_id, 0)
+        power_monitor.end_request(request_id)
         if isinstance(exc, httpx.RequestError):
             return _upstream_error_response(exc)
         raise
@@ -416,7 +416,7 @@ async def _handle_streaming(
         # end_request must run on every path (client disconnect mid-stream,
         # upstream truncation) to avoid leaking active requests, which dilute
         # every other request's energy share until the reaper removes them.
-        energy = power_monitor.end_request(request_id, tokens_out)
+        energy = power_monitor.end_request(request_id)
         energy_kwh = joules_to_kwh(energy.energy_joules)
         co2_grams = await asyncio.to_thread(calculate_co2, energy_kwh)
 

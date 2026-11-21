@@ -13,7 +13,7 @@ logger = logging.getLogger("carbon-proxy.client_id")
 MAX_LABEL_LEN = 64
 
 
-def identify(request: Request, body: dict | None = None) -> str:
+def identify(request: Request) -> str:
     # 1. API key from Authorization header (only present on direct origin hits;
     #    requests through the Cloudflare worker have Authorization stripped and
     #    arrive with X-Carbon-Source pre-set instead).

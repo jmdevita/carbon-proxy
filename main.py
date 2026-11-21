@@ -11,7 +11,7 @@ logging.basicConfig(
 logger = logging.getLogger("carbon-proxy")
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import settings, kv_is_configured
@@ -60,23 +60,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Carbon Proxy", lifespan=lifespan)
 
 
-@app.middleware("http")
-async def revalidate_dashboard_assets(request, call_next):
-    """Force the browser to revalidate dashboard assets every request.
-
-    StaticFiles + FileResponse already emit ETag and Last-Modified, so the
-    server returns 304 Not Modified (no body) when nothing has changed. The
-    missing piece without this header is that browsers fall back to heuristic
-    caching, which can serve stale JS for hours after a deploy.
-    """
-    response = await call_next(request)
-    path = request.url.path
-    if path.startswith("/static/") or path == "/dashboard":
-        response.headers["Cache-Control"] = "no-cache"
-    return response
-
-
 STATIC_DIR = Path(__file__).parent / "static"
+
+# Force the browser to revalidate dashboard assets on every request.
+# Responses already carry ETag and Last-Modified, and StaticFiles answers an
+# unchanged file with a bodiless 304; without this header browsers fall back
+# to heuristic caching and can serve stale JS for hours after a deploy.
+# Set on these responses directly rather than in middleware, which would wrap
+# every proxied LLM stream to tag two routes.
+REVALIDATE = {"Cache-Control": "no-cache"}
+
+
+class RevalidatedStaticFiles(StaticFiles):
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers.update(REVALIDATE)
+        return response
 
 
 @app.get("/health")
@@ -86,17 +85,16 @@ async def health():
 
 @app.get("/")
 async def root():
-    from fastapi.responses import RedirectResponse
     return RedirectResponse("/dashboard")
 
 
 @app.get("/dashboard")
 async def dashboard():
-    return FileResponse(STATIC_DIR / "dashboard.html", media_type="text/html")
+    return FileResponse(STATIC_DIR / "dashboard.html", media_type="text/html", headers=REVALIDATE)
 
 
 # Serve static assets (favicon, etc.)
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/static", RevalidatedStaticFiles(directory=STATIC_DIR), name="static")
 
 # Mount reporting + api_keys routes before proxy so /carbon/* takes priority
 app.include_router(reporting_router)
