@@ -194,6 +194,10 @@ def _detect_chip_tdp() -> tuple[float, float, str]:
     return 0.0, 0.0, ""
 
 
+# gpu_method value for a GPU whose power is part of the CPU package reading.
+# It contributes 0 W of its own, so nothing is counted twice.
+GPU_IN_CPU_PACKAGE = "in_cpu_package"
+
 # Optional NVIDIA support
 try:
     import pynvml
@@ -277,10 +281,21 @@ class PowerMonitor:
         self._detect_cpu_sensor()
         self._detect_gpu_sensor()
 
+        # The RAPL package counter covers the whole chip, integrated GPU
+        # included. Adding an integrated GPU's own sensor on top counts that
+        # power twice, so drop it from the total.
+        if self._gpu_is_in_cpu_reading():
+            logger.info(
+                "GPU power (%s) is already inside the CPU package reading; "
+                "not adding it to the total. Set GPU_IN_CPU_POWER=false to override.",
+                self._gpu_method,
+            )
+            self._gpu_method = GPU_IN_CPU_PACKAGE
+
         # Aggregate source label: "measured" only if every present component
         # is reading from a real sensor. If any component falls back to TDP,
         # the total is partially estimated and must be labelled as such.
-        measured_methods = {"rapl", "powermetrics", "nvml", "hwmon", "rapl_gt"}
+        measured_methods = {"rapl", "powermetrics", "nvml", "hwmon", "rapl_gt", GPU_IN_CPU_PACKAGE}
         present = [m for m in (self._cpu_method, self._gpu_method) if m]
         if not present:
             logger.warning(
@@ -413,6 +428,41 @@ class PowerMonitor:
             logger.info("GPU power: TDP estimation (%.0fW)", tdp)
         else:
             self._effective_tdp_gpu = 0.0
+
+    def _gpu_is_in_cpu_reading(self) -> bool:
+        """True when the detected GPU sensor duplicates power RAPL already counts."""
+        override = settings.gpu_in_cpu_power.strip().lower()
+        if override in ("true", "1", "yes"):
+            return self._gpu_method is not None
+        if override in ("false", "0", "no"):
+            return False
+        if self._cpu_method != "rapl":
+            return False
+        # Intel's GT/uncore domain is a sub-zone of the package domain.
+        if self._gpu_method == "rapl_gt":
+            return True
+        if self._gpu_method == "hwmon":
+            return self._hwmon_gpu_is_integrated(self._gpu_hwmon_path)
+        return False
+
+    @staticmethod
+    def _hwmon_gpu_is_integrated(hwmon_power_path: str) -> bool:
+        """Tell an AMD APU's integrated GPU from a discrete card.
+
+        amdgpu exposes a binary `gpu_metrics` table next to the hwmon
+        directory. Byte 2 of its header is the format revision: 1 for
+        discrete cards, 2 and 3 for APUs. On an APU, power1_average is the
+        whole socket's power, the same quantity RAPL's package counter gives.
+        """
+        metrics_path = os.path.join(
+            os.path.dirname(hwmon_power_path), "..", "..", "gpu_metrics"
+        )
+        try:
+            with open(metrics_path, "rb") as f:
+                header = f.read(4)
+        except OSError:
+            return False
+        return len(header) == 4 and header[2] in (2, 3)
 
     # --- Sensor discovery helpers ---
 

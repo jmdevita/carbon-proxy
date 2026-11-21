@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     rapl_path: str = "/sys/class/powercap/intel-rapl:0/energy_uj"
     gpu_power_path: str = "/host/hwmon/power1_average"
     power_sample_hz: int = 10
+    # Whether the GPU sensor duplicates power the CPU (RAPL package) reading
+    # already includes, as on AMD APUs and Intel iGPUs. "auto" detects it;
+    # "true"/"false" force it. When true, GPU power is not added to the total.
+    gpu_in_cpu_power: str = "auto"
 
     # TDP fallback (watts) -- auto-detected from chip model if not set
     tdp_cpu_watts: float = 0.0

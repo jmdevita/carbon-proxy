@@ -101,6 +101,7 @@ All settings are via environment variables (or `.env` file). See `.env.example` 
 | `SQLITE_PATH` | `/data/carbon.db` | Database file path |
 | `API_KEYS` | | Comma-separated `key:name` pairs for client identification |
 | `POWER_SAMPLE_HZ` | `10` | Power sampling frequency |
+| `GPU_IN_CPU_POWER` | `auto` | Integrated GPUs (AMD APUs, Intel iGPUs) are already inside the RAPL package reading, so their sensor is left out of the total. `auto` detects this; `true`/`false` force it |
 | `TDP_CPU_WATTS` | auto | CPU TDP override (auto-detected if not set) |
 | `TDP_GPU_WATTS` | auto | GPU TDP override (auto-detected if not set) |
 

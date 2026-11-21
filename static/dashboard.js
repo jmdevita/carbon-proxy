@@ -562,7 +562,9 @@ async function refreshAll() {
 
   // Live power
   document.getElementById('cpuW').textContent = fmt(live.cpu_watts,1) + 'W';
-  document.getElementById('gpuW').textContent = fmt(live.gpu_watts,1) + 'W';
+  // An integrated GPU's power is part of the CPU package reading, not separate.
+  document.getElementById('gpuW').textContent =
+    live.gpu_method === 'in_cpu_package' ? 'in CPU' : fmt(live.gpu_watts,1) + 'W';
   document.getElementById('totalW').textContent = fmt(live.total_watts,1) + 'W';
   document.getElementById('pSource').textContent = `${live.power_source} (${live.cpu_method}/${live.gpu_method})`;
   document.getElementById('activeR').textContent = live.active_requests || 0;
