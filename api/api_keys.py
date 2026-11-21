@@ -173,6 +173,10 @@ async def update_key(
 
     clean_label = label.strip()[:64] if label is not None else None
     clean_notes = notes.strip()[:255] if notes is not None else None
+    # An empty label would be written to KV as an empty value, which the
+    # worker reads as "no such key" -- the token would silently stop working.
+    if clean_label is not None and not clean_label:
+        raise HTTPException(400, "Label cannot be empty.")
 
     async with _reconcile_lock:
         row = await asyncio.to_thread(

@@ -27,7 +27,15 @@ def _extract_tokens(data: dict) -> tuple[int, int, int]:
     Cached tokens are subtracted from fresh — they're KV-cache prefix hits with
     near-zero compute, tracked separately for visibility but excluded from totals.
     """
-    usage = data.get("usage", {})
+    # Usage sits at the top level for OpenAI chat and Anthropic message_delta,
+    # under "message" for Anthropic message_start, and under "response" for
+    # the Responses API's response.completed event.
+    usage = (
+        data.get("usage")
+        or (data.get("message") or {}).get("usage")
+        or (data.get("response") or {}).get("usage")
+        or {}
+    )
 
     tokens_in = (
         usage.get("prompt_tokens")
@@ -49,6 +57,36 @@ def _extract_tokens(data: dict) -> tuple[int, int, int]:
     cached_tokens = int(details.get("cached_tokens") or 0)
     fresh_tokens_in = max(0, int(tokens_in) - cached_tokens)
     return fresh_tokens_in, int(tokens_out), cached_tokens
+
+
+# A streamed event is only worth JSON-parsing if it can carry token counts.
+# The last two are llama.cpp's native /completion fields.
+_USAGE_MARKERS = ('"usage"', '"tokens_predicted"', '"tokens_evaluated"')
+
+
+def _merge_stream_usage(totals: dict, data_line: str) -> None:
+    """Fold one SSE `data: ` line's token counts into `totals`.
+
+    Usage can be split across events (Anthropic sends input tokens in
+    message_start and output tokens in message_delta) and is not always in the
+    last event, so each non-zero count overwrites the previous one.
+    """
+    if not any(marker in data_line for marker in _USAGE_MARKERS):
+        return
+    try:
+        data = json.loads(data_line[6:])  # Strip "data: " prefix
+    except json.JSONDecodeError:
+        return
+    if not isinstance(data, dict):
+        return
+    tokens_in, tokens_out, cached_tokens = _extract_tokens(data)
+    if tokens_in:
+        totals["tokens_in"] = tokens_in
+    if tokens_out:
+        totals["tokens_out"] = tokens_out
+    if cached_tokens:
+        totals["cached_tokens"] = cached_tokens
+
 
 def _multipart_field(body: bytes, content_type: str, name: str) -> str:
     """Return a plain (non-file) field from a multipart/form-data body, or "".
@@ -151,7 +189,9 @@ async def proxy_request(request: Request, path: str):
         except (json.JSONDecodeError, UnicodeDecodeError):
             parsed_body = None
 
-        if parsed_body:
+        # Valid JSON that is not an object (a bare array or string) has no
+        # model/stream fields; forward it untouched like any other opaque body.
+        if isinstance(parsed_body, dict) and parsed_body:
             source = identify(request, parsed_body)[:255]
             model = (parsed_body.get("model", "") or "")[:255]
             is_streaming = parsed_body.get("stream", False)
@@ -274,10 +314,17 @@ async def _handle_non_streaming(
         # send a response to.
         return Response(status_code=499)
 
+    # resp.content is already decompressed by httpx, so the upstream's
+    # content-encoding and content-length no longer describe it. Drop them and
+    # let Starlette compute the length of what is actually sent.
+    headers = {
+        k: v for k, v in resp.headers.items()
+        if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")
+    }
     return Response(
         content=resp.content,
         status_code=resp.status_code,
-        headers=dict(resp.headers),
+        headers=headers,
     )
 
 
@@ -297,47 +344,52 @@ async def _handle_streaming(
         raise
 
     # Mutable state shared between generator and background task
-    stream_state = {"last_data_line": "", "remainder": ""}
+    stream_state = {
+        "remainder": "", "logged": False,
+        "tokens_in": 0, "tokens_out": 0, "cached_tokens": 0,
+    }
 
     async def stream_with_capture():
-        async for chunk in resp.aiter_raw():
-            yield chunk
+        try:
+            async for chunk in resp.aiter_raw():
+                yield chunk
 
-            try:
-                # Scan for last data line containing usage
-                text = stream_state["remainder"] + chunk.decode("utf-8", errors="replace")
-                lines = text.split("\n")
-                # Keep incomplete last line for next chunk (cap at 64KB)
-                stream_state["remainder"] = lines[-1][:65536]
-                for line in lines[:-1]:
-                    stripped = line.strip()
-                    if stripped.startswith("data: ") and stripped != "data: [DONE]":
-                        stream_state["last_data_line"] = stripped
-            except Exception:
-                pass  # Never interrupt the stream for usage extraction
+                try:
+                    text = stream_state["remainder"] + chunk.decode("utf-8", errors="replace")
+                    lines = text.split("\n")
+                    # Keep incomplete last line for next chunk (cap at 64KB)
+                    stream_state["remainder"] = lines[-1][:65536]
+                    for line in lines[:-1]:
+                        stripped = line.strip()
+                        if stripped.startswith("data: "):
+                            _merge_stream_usage(stream_state, stripped)
+                except Exception:
+                    pass  # Never interrupt the stream for usage extraction
+        except Exception:
+            # Upstream died mid-stream. Starlette skips the background task
+            # when the body iterator raises, so log here before re-raising or
+            # the request stays active (and unlogged) until the reaper.
+            await cleanup_and_log()
+            raise
 
     async def cleanup_and_log():
+        if stream_state["logged"]:
+            return
+        stream_state["logged"] = True
+
         try:
             await resp.aclose()
         except Exception:
             pass
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
-        tokens_in = 0
-        tokens_out = 0
-        cached_tokens = 0
-
-        last_data_line = stream_state["last_data_line"]
-        if last_data_line:
-            try:
-                data = json.loads(last_data_line[6:])  # Strip "data: " prefix
-                tokens_in, tokens_out, cached_tokens = _extract_tokens(data)
-            except (json.JSONDecodeError, KeyError) as e:
-                logger.warning("Failed to extract usage from streaming response: %s", e)
+        tokens_in = stream_state["tokens_in"]
+        tokens_out = stream_state["tokens_out"]
+        cached_tokens = stream_state["cached_tokens"]
 
         # end_request must run on every path (client disconnect mid-stream,
-        # upstream truncation, JSON parse failure) to avoid leaking active
-        # requests that pin TDP-fallback power at the active load factor.
+        # upstream truncation) to avoid leaking active requests, which dilute
+        # every other request's energy share until the reaper removes them.
         energy = power_monitor.end_request(request_id, tokens_out)
         energy_kwh = joules_to_kwh(energy.energy_joules)
         co2_grams = await asyncio.to_thread(calculate_co2, energy_kwh)

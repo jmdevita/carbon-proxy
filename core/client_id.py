@@ -8,6 +8,10 @@ from config import get_api_key_map
 
 logger = logging.getLogger("carbon-proxy.client_id")
 
+# Matches the label cap in api/api_keys.py. A key's label must survive intact
+# as the request source, since per-key stats and last_used_at join on it.
+MAX_LABEL_LEN = 64
+
 
 def identify(request: Request, body: dict | None = None) -> str:
     # 1. API key from Authorization header (only present on direct origin hits;
@@ -22,12 +26,9 @@ def identify(request: Request, body: dict | None = None) -> str:
             key_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
             row = db.api_key_lookup_active(key_hash)
             if row:
-                # Best-effort last_used_at update; failure shouldn't break the hot path.
-                try:
-                    db.api_key_touch(key_hash)
-                except Exception as e:
-                    logger.debug("api_key_touch failed: %s", e)
-                return row["label"][:50]
+                # last_used_at is stamped by db.log_request, keyed on this
+                # label, so worker-validated requests update it too.
+                return row["label"][:MAX_LABEL_LEN]
         except Exception as e:
             logger.debug("api_keys DB lookup failed: %s", e)
 
@@ -40,7 +41,7 @@ def identify(request: Request, body: dict | None = None) -> str:
     #    edge-side validation, or by any client that wants to self-identify).
     carbon_source = request.headers.get("x-carbon-source", "").strip()
     if carbon_source:
-        return carbon_source[:50]
+        return carbon_source[:MAX_LABEL_LEN]
 
     # 3. User-Agent
     ua = request.headers.get("user-agent", "")

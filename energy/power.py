@@ -61,8 +61,12 @@ def _tokenize(name: str) -> frozenset[str]:
 
 def _load_cpu_tdp_table():
     """Load CPU TDP lookup table from csv."""
-    csv_path = os.path.join(os.path.dirname(__file__), "data", "cpu_power.csv")
+    # data/ sits at the project root, one level above this package.
+    csv_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "cpu_power.csv"
+    )
     if not os.path.isfile(csv_path):
+        logger.warning("CPU TDP table not found at %s; TDP auto-detection disabled", csv_path)
         return
     try:
         with open(csv_path) as f:

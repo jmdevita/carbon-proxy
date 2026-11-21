@@ -131,6 +131,14 @@ def log_request(
             (now, source, model, tokens_in, tokens_out, duration_ms,
              energy_joules, co2_grams, power_source, cached_tokens),
         )
+        # Stamp the key here rather than at auth time: requests validated by
+        # the Cloudflare worker arrive with only the label (X-Carbon-Source),
+        # never the bearer, so the label is the one thing every path has.
+        conn.execute(
+            "UPDATE api_keys SET last_used_at = ? "
+            "WHERE label = ? AND revoked_at IS NULL",
+            (now, source),
+        )
         conn.commit()
 
 
@@ -482,19 +490,6 @@ def api_key_lookup_active(key_hash: str) -> dict | None:
             (key_hash,),
         ).fetchone()
         return dict(row) if row else None
-
-
-def api_key_touch(key_hash: str):
-    """Update last_used_at for an active key. Silently no-ops if missing/revoked."""
-    with _db_lock:
-        conn = _get_conn()
-        now = datetime.now(timezone.utc).isoformat()
-        conn.execute(
-            "UPDATE api_keys SET last_used_at = ? "
-            "WHERE key_hash = ? AND revoked_at IS NULL",
-            (now, key_hash),
-        )
-        conn.commit()
 
 
 def api_key_active_map() -> dict[str, str]:
